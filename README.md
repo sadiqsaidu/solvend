@@ -7,6 +7,14 @@ Solvend is an Anchor-based Solana program that models a simple vending workflow 
 
 This separation lets you handle fiat/USDC payment confirmations off-chain while keeping issuance and redemption of vouchers verifiable on-chain.
 
+### How it works (simple)
+
+- 🛠️ Setup once: Configure the machine with which token to accept (e.g., USDC) and the price.
+- 💳 Pay: User pays (you can verify off-chain or on-chain).
+- 🎟️ Issue voucher: After payment, you issue a short-lived voucher to the user.
+- 🤖 Dispense & ✅ Redeem: Dispenser checks the voucher/OTP and redeems it on-chain.
+- ⭐ Track loyalty: Each successful purchase increments the user's progress; after enough purchases, you can attach an NFT mint as a reward.
+
 ### Program ID
 
 The program declares the following ID in `programs/solvend/src/lib.rs`:
@@ -37,12 +45,21 @@ Update your local ID if you redeploy under a different keypair.
   - `nonce: u64` — unique value to derive a unique PDA per user/issuance
   - `bump: u8` — PDA bump
 
+- `UserProgress`
+  - `user: Pubkey` — the user being tracked
+  - `purchase_count: u8` — number of completed purchases (e.g., capped at 10)
+  - `nft_mint: Option<Pubkey>` — optional NFT minted as a loyalty reward
+  - `opt_in: bool` — whether the user opted into tracking/rewards
+  - `total_earnings: u64` — application-specific metric you can use
+  - `bump: u8` — PDA bump
+
 ---
 
 ### PDAs
 
 - `MachineConfig` PDA: `seeds = [b"machine"]`
 - `Voucher` PDA: `seeds = [b"voucher", user.key().as_ref(), nonce.to_le_bytes()]`
+- `UserProgress` PDA: `seeds = [b"user", user.key().as_ref()]`
 
 These are created and derived via Anchor using the provided seeds and stored bump.
 
@@ -87,6 +104,88 @@ Behavior:
 
 - Requires the voucher is not already redeemed and not expired.
 - Marks voucher `redeemed = true` and emits `VoucherRedeemed` event with `user`, timestamp, `is_free`.
+
+4) `increment_progress(opt_in: bool)`
+
+Accounts:
+
+- `user_progress` (PDA, init if needed, payer = authority)
+- `machine_config` (mut)
+- `user` (any account; the user being tracked)
+- `authority` (signer; the backend/merchant/dispenser)
+- `system_program` (auto-resolved)
+
+Behavior:
+
+- Creates the user's progress account if missing.
+- On first increment, sets `user`, `opt_in`, and initializes counters.
+- Requires progress not to be full (e.g., less than 10).
+- Increments `purchase_count` and also increments machine `total_sales`.
+- Emits `ProgressIncremented` with the new count.
+
+Example (TypeScript):
+
+```ts
+await program.methods
+  .incrementProgress(true)
+  .accounts({
+    userProgress: userProgressPda,
+    machineConfig: machineConfigPDA,
+    user: userPublicKey,
+    authority: authority.publicKey,
+  })
+  .signers([authority])
+  .rpc();
+```
+
+5) `set_nft_mint(nft_mint: Pubkey)`
+
+Accounts:
+
+- `user_progress` (PDA, mut)
+- `authority` (signer)
+
+Behavior:
+
+- Requires `purchase_count` to meet the threshold (e.g., 10) and that no NFT is already set.
+- Saves the provided NFT mint as the reward for the user.
+
+Example:
+
+```ts
+await program.methods
+  .setNftMint(nftMint)
+  .accounts({
+    userProgress: userProgressPda,
+    authority: authority.publicKey,
+  })
+  .signers([authority])
+  .rpc();
+```
+
+6) `reset_progress()`
+
+Accounts:
+
+- `user_progress` (PDA, mut)
+- `authority` (signer)
+
+Behavior:
+
+- Requires an NFT to be set, then clears it and resets `purchase_count` to 0.
+
+Example:
+
+```ts
+await program.methods
+  .resetProgress()
+  .accounts({
+    userProgress: userProgressPda,
+    authority: authority.publicKey,
+  })
+  .signers([authority])
+  .rpc();
+```
 
 ---
 
@@ -184,8 +283,9 @@ await program.methods
 ### Notes and Considerations
 
 - Prices must be provided in smallest token units (e.g., USDC has 6 decimals).
-- `total_sales` currently is not incremented; extend logic as needed.
+- `total_sales` is incremented when `increment_progress` succeeds.
 - `hash_otp` should be computed off-chain (e.g., SHA-256 of an OTP/secret).
 - `authority` semantics for issuing and redeeming can be tailored to your trust model.
+- Minimal emojis are used above to give a high-level sense of the flow without adding noise.
 
 
