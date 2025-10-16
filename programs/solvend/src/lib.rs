@@ -19,7 +19,7 @@ pub mod solvend {
         machine.total_sales = 0;
         machine.bump = ctx.bumps.machine_config;
         
-        msg!("Machine initialized with price: {} lamports", machine.token_mint);
+        msg!("Machine initialized for token: {}", machine.token_mint);
         msg!("Price set to: {}", machine.price);
         Ok(())
     }
@@ -47,7 +47,6 @@ pub struct InitializeMachine<'info> {
         seeds = [b"machine"],
         bump
     )]
-
     pub machine_config: Account<'info, MachineConfig>,
 
     #[account(mut)]
