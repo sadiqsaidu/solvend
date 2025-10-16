@@ -1,3 +1,4 @@
+# === Anchor Default ===
 .anchor
 .DS_Store
 target
@@ -5,3 +6,21 @@ target
 node_modules
 test-ledger
 .yarn
+
+# === Environment & Secrets ===
+.env
+.env.*
+*.keypair.json
+*.key.json
+secrets/
+keys/
+id.json
+
+# === Logs & Temp ===
+*.log
+*.tmp
+*.swp
+
+# === IDE / Editor ===
+.vscode/
+.idea/
