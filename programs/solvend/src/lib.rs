@@ -9,15 +9,18 @@ pub mod solvend {
     // Initialize machine
     pub fn initialize_machine(
         ctx: Context<InitializeMachine>,
-        price_lamports: u64,
+        price: u64,
+        token_mint: Pubkey,
     ) -> Result<()> {
         let machine = &mut ctx.accounts.machine_config;
         machine.owner = ctx.accounts.owner.key();
-        machine.price_lamports = price_lamports;
+        machine.price = price;
+        machine.token_mint = token_mint;
         machine.total_sales = 0;
         machine.bump = ctx.bumps.machine_config;
         
-        msg!("Machine initialized with price: {} lamports", price_lamports);
+        msg!("Machine initialized with price: {} lamports", machine.token_mint);
+        msg!("Price set to: {}", machine.price);
         Ok(())
     }
 }
@@ -35,7 +38,7 @@ pub struct MachineConfig {
 
 // ============ CONTEXTS ============
 
-[derive(Accounts)]
+#[derive(Accounts)]
 pub struct InitializeMachine<'info> {
     #[account(
         init,
