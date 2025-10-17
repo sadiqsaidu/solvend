@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer};
+use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use solana_program::keccak;
 
 declare_id!("FGWgre3gcnWmAod7vDuL7ziMV28bgSrG7ng69g1kZfUW");
 
@@ -30,6 +31,7 @@ pub mod solvend {
         let treasury = &mut ctx.accounts.treasury;
         treasury.token_account = ctx.accounts.treasury_token_account.key();
         treasury.total_collected = 0;
+        treasury.report_count = 0;
         treasury.bump = ctx.bumps.treasury;
 
         msg!("Treasury initializd with token account: {}", treasury.token_account);
@@ -88,17 +90,18 @@ pub mod solvend {
         let progress = &mut ctx.accounts.user_progress;
         let machine = &mut ctx.accounts.machine_config;
 
-        if progress.purchase_count == 0 {
-            // initialize on first purchase
+        if progress.purchase_count == 0 && progress.user == Pubkey::default() {
+            // Initialize on first purchase
             progress.user = ctx.accounts.user.key();
             progress.opt_in = opt_in;
             progress.total_earnings = 0;
             progress.bump = ctx.bumps.user_progress;
         }
 
-        require!(progress.purchase_count < 10, ErrorCode::ProgressFull);
-
-        progress.purchase_count += 1;
+        if progress.purchase_count < 10 {
+            progress.purchase_count += 1;
+        }
+        
         machine.total_sales += 1;
 
         emit!(ProgressIncremented {
@@ -143,12 +146,11 @@ pub mod solvend {
         timeframe_days: u8,
     ) -> Result<()> {
         let report = &mut ctx.accounts.report;
-        let treasury = &ctx.accounts.treasury;
+        let treasury = &mut ctx.accounts.treasury;
         let clock = Clock::get()?;
 
         let price = get_report_price(report_type);
 
-        // transfer usdc from buyer to treasury
         token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -161,23 +163,21 @@ pub mod solvend {
             price,
         )?;
 
-        // calculate and send 10% to machine owner
-        let owner_share = price * 10 / 100;
+        let owner_share = price.checked_mul(10).unwrap().checked_div(100).unwrap();
         token::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
                     from: ctx.accounts.treasury_token_account.to_account_info(),
                     to: ctx.accounts.owner_token_account.to_account_info(),
-                    authority: ctx.accounts.treasury.to_account_info(),
+                    authority: treasury.to_account_info(),
                 },
                 &[&[b"treasury", &[treasury.bump]]],
             ),
             owner_share,
         )?;
 
-        // create report record
-        report.report_id = treasury.total_collected / price;
+        report.report_id = treasury.report_count;
         report.buyer = ctx.accounts.buyer.key();
         report.report_type = report_type;
         report.timeframe_days = timeframe_days;
@@ -185,11 +185,12 @@ pub mod solvend {
         report.ipfs_cid = None;
         report.status = ReportStatus::Pending;
         report.created_at = clock.unix_timestamp;
-        report.remaining_for_distribution = price - owner_share; // 90%
+        report.remaining_for_distribution = price - owner_share;
+        report.merkle_root = None;
         report.bump = ctx.bumps.report; 
 
-        let treasury = &mut ctx.accounts.treasury;
         treasury.total_collected += price;
+        treasury.report_count += 1;
 
         emit!(ReportPurchased {
             report_id: report.report_id,
@@ -222,79 +223,93 @@ pub mod solvend {
         Ok(())
     }
 
-    // distributes earnings
-    pub fn distribute_earnings<'info>(
-        ctx: Context<'_, '_, 'info, 'info, DistributeEarnings<'info>>, // <-- FIX: Changed the third '_' to 'info'
-        report_id: u64,
-        num_recipient: u8,
+    // Called by backend to set the Merkle root for a report's distribution
+    pub fn submit_distribution_root(
+        ctx: Context<SubmitDistributionRoot>,
+        merkle_root: [u8; 32],
     ) -> Result<()> {
         let report = &mut ctx.accounts.report;
-        let treasury = &ctx.accounts.treasury;
-
         require!(report.status == ReportStatus::Ready, ErrorCode::ReportNotReady);
-        require!(report.remaining_for_distribution > 0, ErrorCode::AlreadyDistributed);
+        require!(report.merkle_root.is_none(), ErrorCode::DistributionRootAlreadySet);
 
-        let share_per_user = report.remaining_for_distribution / num_recipient as u64;
-
-        let accounts = &ctx.remaining_accounts;
-        require!(accounts.len() == (num_recipient as usize * 2), ErrorCode::InvalidAccountCount);
+        report.merkle_root = Some(merkle_root);
+        report.status = ReportStatus::DistributionReady;
         
-        for i in 0..(num_recipient as usize) {
-            let user_token_account_info = &accounts[i * 2];
-            let user_progress_info = &accounts[i * 2 + 1];
-
-            // Deserialize and verify accounts
-            let user_token_account = Account::<TokenAccount>::try_from(user_token_account_info)?;
-            let user_progress = Account::<UserProgress>::try_from(user_progress_info)?;
-            
-            require!(
-                user_token_account.owner == user_progress.user,
-                ErrorCode::UserAccountMismatch
-            );
-
-            // Transfer to user
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    Transfer {
-                        from: ctx.accounts.treasury_token_account.to_account_info(),
-                        to: user_token_account_info.to_account_info(),
-                        authority: ctx.accounts.treasury.to_account_info(),
-                    },
-                    &[&[b"treasury", &[treasury.bump]]],
-                ),
-                share_per_user,
-            )?;
-
-            // Re-deserialize mutably to update user progress earnings 
-            let mut user_progress = Account::<UserProgress>::try_from(user_progress_info)?;
-            user_progress.total_earnings += share_per_user;
-            user_progress.exit(&crate::ID)?;
-        }
-
-        report.remaining_for_distribution = 0;
-        report.status = ReportStatus::Distributed;
-
-        emit!(EarningsDistributed {
-            report_id, 
-            total_amount: share_per_user * num_recipient as u64,
-            num_recipient,
-        });
-
         Ok(())
     }
 
+    // Called by the end-user to claim their share of the earnings
+    pub fn claim_earnings(
+        ctx: Context<ClaimEarnings>,
+        amount: u64,
+        proof: Vec<[u8; 32]>,
+    ) -> Result<()> {
+        let report = &ctx.accounts.report;
+        let treasury = &ctx.accounts.treasury;
+        let claimant = &ctx.accounts.claimant;
+        
+        require!(report.status == ReportStatus::DistributionReady, ErrorCode::DistributionNotReady);
+        let merkle_root = report.merkle_root.ok_or(ErrorCode::DistributionNotReady)?;
+        
+        // Create the leaf node for the claimant
+        let leaf = keccak::hashv(&[
+            claimant.key().as_ref(), // <-- More idiomatic Rust
+            &amount.to_le_bytes(),
+        ]);
+
+        // Verify the proof
+        require!(
+            verify_merkle_proof(proof, merkle_root, leaf.to_bytes()),
+            ErrorCode::InvalidMerkleProof
+        );
+        
+        // Transfer funds
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.treasury_token_account.to_account_info(),
+                    to: ctx.accounts.claimant_token_account.to_account_info(),
+                    authority: treasury.to_account_info(),
+                },
+                &[&[b"treasury", &[treasury.bump]]],
+            ),
+            amount,
+        )?;
+        
+        let claim_record = &mut ctx.accounts.claim_record;
+        claim_record.claimant = claimant.key();
+        claim_record.report_id = report.report_id;
+        claim_record.amount = amount;
+        claim_record.bump = ctx.bumps.claim_record;
+
+        Ok(())
+    }
 }
+
+// ============ HELPER FUNCTION ============
+fn verify_merkle_proof(proof: Vec<[u8; 32]>, root: [u8; 32], leaf: [u8; 32]) -> bool {
+    let mut computed_hash = leaf;
+    for proof_element in proof.iter() {
+        if computed_hash <= *proof_element {
+            computed_hash = keccak::hashv(&[&computed_hash, proof_element]).to_bytes();
+        } else {
+            computed_hash = keccak::hashv(&[proof_element, &computed_hash]).to_bytes();
+        }
+    }
+    computed_hash == root
+}
+
 
 // ============ ACCOUNT STRUCTURES ============
 
 #[account]
 pub struct MachineConfig {
-    pub owner: Pubkey,          //32
-    pub token_mint: Pubkey,     //32
-    pub price: u64,             //8
-    pub total_sales: u64,       //8
-    pub bump: u8,               //1
+    pub owner: Pubkey,
+    pub token_mint: Pubkey,
+    pub price: u64,
+    pub total_sales: u64,
+    pub bump: u8,
 }
 
 #[account]
@@ -322,6 +337,7 @@ pub struct UserProgress {
 pub struct Treasury {
     pub token_account: Pubkey,
     pub total_collected: u64,
+    pub report_count: u64,
     pub bump: u8,
 }
 
@@ -336,8 +352,18 @@ pub struct Report {
     pub status: ReportStatus, 
     pub created_at: i64, 
     pub remaining_for_distribution: u64,
+    pub merkle_root: Option<[u8; 32]>,
     pub bump: u8,
 }
+
+#[account]
+pub struct ClaimRecord {
+    pub claimant: Pubkey,
+    pub report_id: u64,
+    pub amount: u64,
+    pub bump: u8,
+}
+
 
 // ============ ENUMS ============
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
@@ -350,13 +376,14 @@ pub enum ReportType {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
 pub enum ReportStatus {
     Pending, 
-    Ready, 
+    Ready,
+    DistributionReady,
     Distributed,
 }
 
 pub fn get_report_price(report_type: ReportType) -> u64 {
     match report_type {
-        ReportType::Daily => 1_000_000u64,      // 1 usdc
+        ReportType::Daily => 1_000_000u64,      // 1 usdc (assuming 6 decimals)
         ReportType::Weekly => 5_000_000u64,     // 5 usdc
         ReportType::Monthly => 20_000_000u64,   // 20 usdc
     }
@@ -386,7 +413,7 @@ pub struct InitializeTreasury<'info> {
     #[account(
         init, 
         payer = authority, 
-        space = 8 + 32 + 8 + 1,
+        space = 8 + 32 + 8 + 8 + 1,
         seeds = [b"treasury"],
         bump
     )]
@@ -402,7 +429,8 @@ pub struct InitializeTreasury<'info> {
     )]
     pub treasury_token_account: Account <'info, TokenAccount>,
 
-    pub usdc_mint: Account<'info, token::Mint>,
+    // <-- FIX 2: Correct type for usdc_mint
+    pub usdc_mint: Account<'info, Mint>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -428,7 +456,7 @@ pub struct CreateVoucher<'info> {
     pub user: AccountInfo<'info>,
 
     #[account(mut)]
-    pub authority: Signer<'info>, // Backend/merchant authority
+    pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -441,7 +469,7 @@ pub struct RedeemVoucher<'info> {
         bump = voucher.bump
     )]
     pub voucher: Account<'info, Voucher>,
-
+    #[account(mut)]
     pub authority: Signer<'info>,
 }
 
@@ -456,7 +484,7 @@ pub struct IncrementProgress<'info> {
     )]
     pub user_progress: Account<'info, UserProgress>,
 
-    #[account(mut)]
+    #[account(mut, seeds = [b"machine"], bump = machine_config.bump)]
     pub machine_config: Account<'info, MachineConfig>,
 
     /// CHECK: user whose progress is being tracked
@@ -476,7 +504,6 @@ pub struct SetNftMint<'info> {
         bump = user_progress.bump
     )]
     pub user_progress: Account<'info, UserProgress>,
-
     pub authority: Signer<'info>,
 }
 
@@ -488,7 +515,6 @@ pub struct ResetProgress<'info> {
         bump = user_progress.bump
     )]
     pub user_progress: Account<'info, UserProgress>, 
-
     pub authority: Signer<'info>,
 }
 
@@ -497,13 +523,13 @@ pub struct BuyReport<'info> {
     #[account(
         init,
         payer = buyer,
-        space = 8 + 136, 
-        seeds = [b"report", treasury.total_collected.to_le_bytes().as_ref()],
+        space = 8 + 150,
+        seeds = [b"report", treasury.report_count.to_le_bytes().as_ref()],
         bump
     )]
     pub report: Account<'info, Report>,
 
-    #[account(mut)]
+    #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
     pub treasury: Account<'info, Treasury>,
 
     #[account(mut)]
@@ -512,9 +538,13 @@ pub struct BuyReport<'info> {
     #[account(mut)]
     pub buyer_token_account: Account<'info, TokenAccount>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = owner_token_account.owner == machine_config.owner @ ErrorCode::OwnerAccountMismatch
+    )]
     pub owner_token_account: Account<'info, TokenAccount>,
 
+    #[account(seeds = [b"machine"], bump = machine_config.bump)]
     pub machine_config: Account<'info, MachineConfig>,
 
     #[account(mut)]
@@ -532,33 +562,55 @@ pub struct AttachReportData<'info> {
         bump = report.bump
     )]
     pub report: Account<'info, Report>,
-
     pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
 #[instruction(report_id: u64)]
-pub struct DistributeEarnings<'info> {
+pub struct SubmitDistributionRoot<'info> {
     #[account(
         mut,
         seeds = [b"report", report_id.to_le_bytes().as_ref()],
         bump = report.bump
     )]
     pub report: Account<'info, Report>,
+    pub authority: Signer<'info>,
+}
 
+#[derive(Accounts)]
+#[instruction(report_id: u64)]
+pub struct ClaimEarnings<'info> {
     #[account(
-        seeds = [b"treasury"],
-        bump = treasury.bump
+        seeds = [b"report", report_id.to_le_bytes().as_ref()],
+        bump = report.bump
     )]
+    pub report: Account<'info, Report>,
+
+    #[account(seeds = [b"treasury"], bump = treasury.bump)]
     pub treasury: Account<'info, Treasury>,
 
-    #[account(mut)]
+    #[account(mut, seeds=[b"treasury", b"usdtoken"], bump)]
     pub treasury_token_account: Account<'info, TokenAccount>,
 
-    pub authority: Signer<'info>,
+    #[account(mut)]
+    pub claimant_token_account: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub claimant: Signer<'info>,
+
+    #[account(
+        init,
+        payer = claimant,
+        space = 8 + 32 + 8 + 8 + 1,
+        seeds = [b"claim", claimant.key().as_ref(), report_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub claim_record: Account<'info, ClaimRecord>,
+
     pub token_program: Program<'info, Token>,
-    // remaining_accounts: [user_token_account_0, user_progress_0, ...]
+    pub system_program: Program<'info, System>,
 }
+
 
 // ============ EVENTS ============
 #[event]
@@ -567,13 +619,11 @@ pub struct VoucherRedeemed {
     pub timestamp: i64,
     pub is_free: bool,
 }
-
 #[event]
 pub struct ProgressIncremented {
     pub user: Pubkey, 
     pub new_count: u8,
 }
-
 #[event]
 pub struct ReportPurchased {
     pub report_id: u64,
@@ -581,22 +631,13 @@ pub struct ReportPurchased {
     pub report_type: ReportType,
     pub paid_amount: u64
 }
-
 #[event]
 pub struct ReportReady {
-    pub report_id: u64,
+    pub report_id: u64, 
     pub ipfs_cid: String,
 }
 
-#[event]
-pub struct EarningsDistributed {
-    pub report_id: u64, 
-    pub total_amount: u64,
-    pub num_recipient: u8,
-}
-
 // ============ ERRORS ============
-
 #[error_code]
 pub enum ErrorCode {
     #[msg("Invalid expiry timestamp")]
@@ -605,8 +646,6 @@ pub enum ErrorCode {
     AlreadyRedeemed,
     #[msg("Voucher has expired")]
     VoucherExpired,
-    #[msg("Progress already at maximum (10)")]
-    ProgressFull,
     #[msg("Insufficient purchases for NFT mint")]
     InsufficientPurchases,
     #[msg("NFT already minted for this user")]
@@ -617,12 +656,14 @@ pub enum ErrorCode {
     ReportNotPending,
     #[msg("IPFS CID too long (max 64 chars)")]
     CidTooLong,
-    #[msg("Report not ready for distribution")]
+    #[msg("Report not ready for distribution root")]
     ReportNotReady,
-    #[msg("Earnings already distributed")]
-    AlreadyDistributed,
-    #[msg("Invalid number of accounts provided")]
-    InvalidAccountCount,
-    #[msg("User token account does not match progress account")]
-    UserAccountMismatch,
+    #[msg("Distribution root has already been set")]
+    DistributionRootAlreadySet,
+    #[msg("Distribution is not ready for claims")]
+    DistributionNotReady,
+    #[msg("Invalid Merkle Proof")]
+    InvalidMerkleProof,
+    #[msg("Owner token account does not match machine owner")]
+    OwnerAccountMismatch,
 }
