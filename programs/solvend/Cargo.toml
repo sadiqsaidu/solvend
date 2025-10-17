@@ -11,6 +11,7 @@ name = "solvend"
 [features]
 default = []
 cpi = ["no-entrypoint"]
+
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
