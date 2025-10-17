@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
 declare_id!("FGWgre3gcnWmAod7vDuL7ziMV28bgSrG7ng69g1kZfUW");
 
@@ -21,6 +22,17 @@ pub mod solvend {
         
         msg!("Machine initialized for token: {}", machine.token_mint);
         msg!("Price set to: {}", machine.price);
+        Ok(())
+    }
+
+    // Initialize the treasury
+    pub fn initialize_treasury(ctx: Context<InitializeTreasury>) -> Result<()> {
+        let treasury = &mut ctx.accounts.treasury;
+        treasury.token_account = ctx.accounts.treasury_token_account.key();
+        treasury.total_collected = 0;
+        treasury.bump = ctx.bumps.treasury;
+
+        msg!("Treasury initializd with token account: {}", treasury.token_account);
         Ok(())
     }
 
@@ -158,6 +170,13 @@ pub struct UserProgress {
     pub bump: u8,
 }
 
+#[account]
+pub struct Treasury {
+    pub token_account: Pubkey,
+    pub total_collected: u64,
+    pub bump: u8,
+}
+
 // ============ CONTEXTS ============
 
 #[derive(Accounts)]
@@ -178,12 +197,43 @@ pub struct InitializeMachine<'info> {
 }
 
 #[derive(Accounts)]
+pub struct InitializeTreasury<'info> {
+    #[account(
+        init, 
+        payer = authority, 
+        space = 8 + 32 + 8 + 1,
+        seeds = [b"treasury"],
+        bump
+    )]
+    pub treasury: Account<'info, Treasury>,
+
+    #[account(
+        init,
+        payer = authority,
+        token::mint = usdc_mint, 
+        token::authority = treasury, 
+        seeds = [b"treasury", b"usdtoken"],
+        bump
+    )]
+    pub treasury_token_account: Account <'info, TokenAccount>,
+
+    pub usdc_mint: Account<'info, token::Mint>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>, 
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
 #[instruction(nonce: u64)]
 pub struct CreateVoucher<'info> {
     #[account(
         init, 
         payer = authority,
-        space = 8 + 83,
+        space = 8 + 32 + 32 + 8 + 1 + 1 + 8 + 1,
         seeds = [b"voucher", user.key().as_ref(), nonce.to_le_bytes().as_ref()],
         bump
     )]
@@ -215,7 +265,7 @@ pub struct IncrementProgress<'info> {
     #[account(
         init_if_needed, 
         payer = authority, 
-        space = 8 + 76, 
+        space = 8 + 32 + 1 + 33 + 1 + 8 + 1, 
         seeds = [b"user", user.key().as_ref()],
         bump
     )]
