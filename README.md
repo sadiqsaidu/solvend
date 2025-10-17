@@ -268,6 +268,40 @@ await program.methods
   .rpc();
 ```
 
+11) `claim_earnings(amount: u64, proof: Vec<[u8; 32]>)`
+
+Accounts:
+
+- `report` (read-only; must be `DistributionReady` with a `merkle_root` set)
+- `treasury` (read-only), `treasury_token_account` (mut)
+- `claimant_token_account` (mut) — claimant's SPL token account to receive funds
+- `claimant` (signer) — wallet claiming their share
+- `token_program`
+
+Behavior (simple):
+
+- Off-chain, you build a Merkle tree of eligible claimants and their amounts; the program stores the root.
+- The claimant submits their `amount` and Merkle `proof`; on-chain we hash the leaf as
+  `keccak(user_pubkey || amount_32_bytes)` and verify the proof against the stored root.
+- If valid, tokens are transferred from treasury to the claimant.
+
+Example (TypeScript outline):
+
+```ts
+await program.methods
+  .claimEarnings(amount, proof)
+  .accounts({
+    report: reportPda,
+    treasury: treasuryPda,
+    treasuryTokenAccount: treasuryTokenPda,
+    claimantTokenAccount: claimantAta,
+    claimant: wallet.publicKey,
+    tokenProgram: TOKEN_PROGRAM_ID,
+  })
+  .signers([])
+  .rpc();
+```
+
 Example:
 
 ```ts
