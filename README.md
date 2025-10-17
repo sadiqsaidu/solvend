@@ -53,6 +53,23 @@ Update your local ID if you redeploy under a different keypair.
   - `total_earnings: u64` — application-specific metric you can use
   - `bump: u8` — PDA bump
 
+- `Treasury`
+  - `token_account: Pubkey` — SPL token account holding collected fees
+  - `total_collected: u64` — total tokens collected (e.g., USDC in base units)
+  - `bump: u8` — PDA bump
+
+- `Report`
+  - `report_id: u64` — sequential ID for each report
+  - `buyer: Pubkey` — who bought the report
+  - `report_type: ReportType` — Daily | Weekly | Monthly
+  - `timeframe_days: u8` — how many days to cover
+  - `paid_amount: u64` — amount paid for the report
+  - `ipfs_cid: Option<String>` — optional IPFS CID when data is ready
+  - `status: ReportStatus` — Pending | Ready | Distributed
+  - `created_at: i64` — unix timestamp
+  - `remaining_for_distribution: u64` — amount left to distribute to users
+  - `bump: u8` — PDA bump
+
 ---
 
 ### PDAs
@@ -60,6 +77,9 @@ Update your local ID if you redeploy under a different keypair.
 - `MachineConfig` PDA: `seeds = [b"machine"]`
 - `Voucher` PDA: `seeds = [b"voucher", user.key().as_ref(), nonce.to_le_bytes()]`
 - `UserProgress` PDA: `seeds = [b"user", user.key().as_ref()]`
+- `Treasury` PDA: `seeds = [b"treasury"]`
+- `Treasury Token Account` PDA: `seeds = [b"treasury", b"usdtoken"]` (token account owned by `Treasury`)
+- `Report` PDA: `seeds = [b"report", <report_id>.to_le_bytes()]` (created when buying a report)
 
 These are created and derived via Anchor using the provided seeds and stored bump.
 
@@ -173,6 +193,80 @@ Accounts:
 Behavior:
 
 - Requires an NFT to be set, then clears it and resets `purchase_count` to 0.
+7) `initialize_treasury()`
+
+Accounts:
+
+- `treasury` (PDA, init)
+- `treasury_token_account` (PDA, init; SPL token owned by `treasury`)
+- `usdc_mint` (SPL token mint account)
+- `authority` (signer)
+- `system_program`, `token_program`, `rent` (auto-resolved programs/sysvars)
+
+Behavior:
+
+- Creates a treasury PDA and its SPL token account for collecting fees/shares.
+
+8) `buy_report(report_type: ReportType, timeframe_days: u8)`
+
+Accounts:
+
+- `report` (PDA, init)
+- `treasury` (mut), `treasury_token_account` (mut)
+- `buyer_token_account` (mut) — buyer's SPL token account paying the fee
+- `owner_token_account` (mut) — machine owner's token account to receive 10% share
+- `machine_config` (read-only)
+- `buyer` (signer)
+- `token_program`, `system_program`
+
+Behavior:
+
+- Transfers report price from buyer to treasury, then sends 10% to machine owner.
+- Creates a `Report` record with status `Pending` and tracks remaining 90% for distribution.
+
+9) `attach_report_data(ipfs_cid: String)`
+
+Accounts:
+
+- `report` (mut; must be `Pending`)
+- `authority` (signer)
+
+Behavior:
+
+- Attaches an IPFS CID to the report and marks it `Ready`.
+
+10) `distribute_earnings(report_id: u64, num_recipient: u8)`
+
+Accounts:
+
+- `report` (mut; must be `Ready`)
+- `treasury` (read-only), `treasury_token_account` (mut)
+- `authority` (signer)
+- Remaining accounts: repeated pairs `[user_token_account_i, user_progress_i]`
+
+Behavior:
+
+- Splits the remaining amount evenly across `num_recipient` users, transfers tokens from
+  treasury to each `user_token_account_i`, and updates each `user_progress_i.total_earnings`.
+- Marks report as `Distributed` and zeroes remaining amount.
+
+Minimal example (TypeScript outline):
+
+```ts
+// remainingAccounts: [userToken0, userProgress0, userToken1, userProgress1, ...]
+await program.methods
+  .distributeEarnings(reportId, numRecipients)
+  .accounts({
+    report: reportPda,
+    treasury: treasuryPda,
+    treasuryTokenAccount: treasuryTokenPda,
+    authority: authority.publicKey,
+    tokenProgram: TOKEN_PROGRAM_ID,
+  })
+  .remainingAccounts(remainingAccounts.map(a => ({ pubkey: a, isWritable: true, isSigner: false })))
+  .signers([authority])
+  .rpc();
+```
 
 Example:
 
@@ -287,5 +381,12 @@ await program.methods
 - `hash_otp` should be computed off-chain (e.g., SHA-256 of an OTP/secret).
 - `authority` semantics for issuing and redeeming can be tailored to your trust model.
 - Minimal emojis are used above to give a high-level sense of the flow without adding noise.
+
+### Token/CPI Notes (simple)
+
+- All token transfers use SPL Token CPI via `anchor_spl::token::transfer`.
+- The treasury token account is a PDA, so CPI calls that move funds out of it
+  use a signer seed like `[b"treasury", &[treasury.bump]]`.
+- Prices are hardcoded for `ReportType` in the program via `get_report_price` and use base units (e.g., USDC 6 decimals).
 
 
