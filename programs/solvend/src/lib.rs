@@ -247,7 +247,7 @@ pub mod solvend {
         let report = &ctx.accounts.report;
         let treasury = &ctx.accounts.treasury;
         let claimant = &ctx.accounts.claimant;
-        
+
         require!(report.status == ReportStatus::DistributionReady, ErrorCode::DistributionNotReady);
         let merkle_root = report.merkle_root.ok_or(ErrorCode::DistributionNotReady)?;
         
