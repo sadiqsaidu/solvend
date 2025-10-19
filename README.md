@@ -423,4 +423,216 @@ await program.methods
   use a signer seed like `[b"treasury", &[treasury.bump]]`.
 - Prices are hardcoded for `ReportType` in the program via `get_report_price` and use base units (e.g., USDC 6 decimals).
 
+---
+
+## Backend API Server
+
+The backend is a Node.js/TypeScript API server that acts as the bridge between the vending machine hardware and the Solana blockchain. It handles payment verification, voucher creation, and OTP management.
+
+### Architecture Overview
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Vending       │    │   Backend API   │    │   Solana        │
+│   Machine       │◄──►│   Server        │◄──►│   Blockchain    │
+│   (Hardware)    │    │   (Node.js)     │    │   (Anchor)      │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                              │
+                              ▼
+                       ┌─────────────────┐
+                       │   MongoDB        │
+                       │   Database       │
+                       └─────────────────┘
+```
+
+### Core Components
+
+#### 1. **API Server** (`src/index.ts`)
+- Express.js server running on port 3000 (configurable via `PORT` env var)
+- Handles REST API endpoints for vending machine communication
+- Manages database connections and blockchain listeners
+
+#### 2. **Database Models** (`src/database/models/`)
+- **Purchase Model**: Tracks purchase transactions with status flow:
+  - `PENDING` → `VOUCHER_CREATED` → `REDEEMED` → `EXPIRED`
+  - Stores reference ID, user wallet, OTP hash, nonce, and timestamps
+
+#### 3. **Blockchain Integration** (`src/services/solana.service.ts`)
+- **Solana Service**: Handles on-chain operations
+  - `createVoucherOnChain()`: Creates time-bound vouchers on Solana
+  - `redeemAndIncrement()`: Redeems vouchers and tracks user progress
+- **Program Connection**: Uses Anchor framework to interact with the Solana program
+- **Wallet Management**: Backend wallet for signing transactions
+
+#### 4. **Blockchain Listener** (`src/listeners/blockchain.listener.ts`)
+- **Real-time Monitoring**: Listens for Solana transactions containing memo instructions
+- **Payment Detection**: Identifies payments by parsing memo data for reference IDs
+- **Automatic Voucher Creation**: Creates vouchers and OTPs when payments are detected
+
+#### 5. **API Controllers** (`src/api/controllers/`)
+- **Purchase Controller**: Handles OTP validation and voucher redemption
+- **REST Endpoints**: Provides HTTP API for vending machine integration
+
+### Workflow: Complete Purchase Flow
+
+#### Step 1: Payment Detection
+```typescript
+// 1. User makes payment with reference ID in memo
+// 2. Blockchain listener detects transaction
+const referenceId = Buffer.from(memoIx.data, 'base64').toString('utf-8');
+const purchase = await Purchase.findOne({ referenceId, status: 'PENDING' });
+```
+
+#### Step 2: Voucher Creation
+```typescript
+// 3. Generate OTP and create voucher on-chain
+const otp = Math.floor(1000 + Math.random() * 9000).toString();
+const otpHash = Buffer.from(keccak256.digest(otp));
+const nonce = Date.now();
+
+await createVoucherOnChain(userWallet, otpHash, nonce);
+```
+
+#### Step 3: Database Update
+```typescript
+// 4. Update purchase record
+purchase.status = 'VOUCHER_CREATED';
+purchase.otpHash = keccak256(otp);
+purchase.otpExpiry = new Date(Date.now() + 3600 * 1000);
+purchase.nonce = nonce;
+await purchase.save();
+```
+
+#### Step 4: OTP Delivery
+```typescript
+// 5. Send OTP to user (via notification service)
+sendOtpToUser(userWallet.toBase58(), otp);
+```
+
+#### Step 5: Voucher Redemption
+```typescript
+// 6. Vending machine validates OTP
+// POST /api/validate-otp
+const { otp } = req.body;
+const otpHash = keccak256(otp);
+const purchase = await Purchase.findOne({ otpHash, status: 'VOUCHER_CREATED' });
+
+// 7. Redeem voucher on-chain
+await redeemAndIncrement(new PublicKey(purchase.userWallet), purchase.nonce, userOptIn);
+```
+
+### API Endpoints
+
+#### `POST /api/validate-otp`
+Validates OTP and redeems voucher for vending machine.
+
+**Request:**
+```json
+{
+  "otp": "1234"
+}
+```
+
+**Response (Success):**
+```json
+{
+  "message": "Success",
+  "dispense": true
+}
+```
+
+**Response (Error):**
+```json
+{
+  "message": "Invalid or expired OTP"
+}
+```
+
+### Environment Variables
+
+Create a `.env` file in the backend directory:
+
+```bash
+# Solana Configuration
+SOLANA_RPC_HOST=https://api.mainnet-beta.solana.com
+PROGRAM_ID=FGWgre3gcnWmAod7vDuL7ziMV28bgSrG7ng69g1kZfUW
+BACKEND_WALLET_PATH=/path/to/backend-wallet.json
+
+# Database
+MONGODB_URI=mongodb://localhost:27017/solvend
+
+# Server
+PORT=3000
+```
+
+### Database Schema
+
+#### Purchase Collection
+```typescript
+interface IPurchase {
+  referenceId: string;        // Unique payment reference
+  transactionSignature?: string; // Solana transaction signature
+  userWallet: string;         // User's wallet address
+  otpHash?: string;          // Hashed OTP for validation
+  otpExpiry?: Date;          // OTP expiration time
+  nonce?: number;            // Unique nonce for voucher
+  status: 'PENDING' | 'VOUCHER_CREATED' | 'REDEEMED' | 'EXPIRED';
+  createdAt: Date;
+  updatedAt: Date;
+}
+```
+
+### Security Features
+
+1. **OTP Hashing**: OTPs are hashed using keccak256 before storage
+2. **Time Expiration**: Vouchers expire after 1 hour
+3. **One-time Use**: Vouchers can only be redeemed once
+4. **Nonce Uniqueness**: Each voucher has a unique nonce to prevent replay attacks
+
+### Error Handling
+
+The backend includes comprehensive error handling for:
+- Invalid OTP formats
+- Expired vouchers
+- Missing purchase records
+- Blockchain transaction failures
+- Database connection issues
+
+### Development Setup
+
+1. **Install Dependencies:**
+```bash
+cd backend
+npm install
+```
+
+2. **Start Development Server:**
+```bash
+npm run dev
+```
+
+3. **Build for Production:**
+```bash
+npm run build
+```
+
+### Integration with Vending Machine
+
+The backend provides a simple HTTP API that vending machines can use:
+
+1. **Payment Flow**: Machine displays QR code with payment instructions
+2. **OTP Entry**: User enters OTP received via notification
+3. **Validation**: Machine calls `/api/validate-otp` endpoint
+4. **Dispensing**: If validation succeeds, machine dispenses product
+
+### Monitoring and Logging
+
+The backend includes comprehensive logging for:
+- Blockchain transaction monitoring
+- API request/response logging
+- Error tracking and debugging
+- Purchase flow analytics
+
+This backend architecture provides a robust, scalable solution for integrating physical vending machines with the Solana blockchain, ensuring secure and verifiable transactions while maintaining a smooth user experience.
+
 
