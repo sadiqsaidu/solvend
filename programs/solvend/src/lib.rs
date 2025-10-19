@@ -8,7 +8,6 @@ declare_id!("FGWgre3gcnWmAod7vDuL7ziMV28bgSrG7ng69g1kZfUW");
 pub mod solvend {
     use super::*;
 
-    // Initialize machine
     pub fn initialize_machine(
         ctx: Context<InitializeMachine>,
         price: u64,
@@ -20,25 +19,18 @@ pub mod solvend {
         machine.token_mint = token_mint;
         machine.total_sales = 0;
         machine.bump = ctx.bumps.machine_config;
-        
-        msg!("Machine initialized for token: {}", machine.token_mint);
-        msg!("Price set to: {}", machine.price);
         Ok(())
     }
 
-    // Initialize the treasury
     pub fn initialize_treasury(ctx: Context<InitializeTreasury>) -> Result<()> {
         let treasury = &mut ctx.accounts.treasury;
         treasury.token_account = ctx.accounts.treasury_token_account.key();
         treasury.total_collected = 0;
         treasury.report_count = 0;
         treasury.bump = ctx.bumps.treasury;
-
-        msg!("Treasury initializd with token account: {}", treasury.token_account);
         Ok(())
     }
 
-    // create purchase voucher (after confirmed payment)
     pub fn create_voucher(
         ctx: Context<CreateVoucher>,
         hash_otp: [u8; 32],
@@ -48,9 +40,7 @@ pub mod solvend {
     ) -> Result<()> {
         let voucher = &mut ctx.accounts.voucher;
         let clock = Clock::get()?;
-
         require!(expiry_ts > clock.unix_timestamp, ErrorCode::InvalidExpiry);
-
         voucher.user = ctx.accounts.user.key();
         voucher.hash_otp = hash_otp;
         voucher.expiry_ts = expiry_ts;
@@ -58,88 +48,64 @@ pub mod solvend {
         voucher.is_free = is_free;
         voucher.nonce = nonce;
         voucher.bump = ctx.bumps.voucher;
-
-        msg!("Voucher created for user: {}", ctx.accounts.user.key());
         Ok(())
     }
 
-    // redeem voucher (after dispensing)
     pub fn redeem_voucher(ctx: Context<RedeemVoucher>) -> Result<()> {
-        let voucher = &mut ctx.accounts.voucher; 
+        let voucher = &mut ctx.accounts.voucher;
         let clock = Clock::get()?;
-
         require!(!voucher.redeemed, ErrorCode::AlreadyRedeemed);
         require!(clock.unix_timestamp <= voucher.expiry_ts, ErrorCode::VoucherExpired);
-
         voucher.redeemed = true;
-
         emit!(VoucherRedeemed {
             user: voucher.user,
             timestamp: clock.unix_timestamp,
             is_free: voucher.is_free,
         });
-
         Ok(())
     }
 
-    // increment user progress 
     pub fn increment_progress(
         ctx: Context<IncrementProgress>,
-        opt_in: bool, 
+        opt_in: bool,
     ) -> Result<()> {
         let progress = &mut ctx.accounts.user_progress;
-        let machine = &mut ctx.accounts.machine_config;
-
         if progress.purchase_count == 0 && progress.user == Pubkey::default() {
-            // Initialize on first purchase
             progress.user = ctx.accounts.user.key();
             progress.opt_in = opt_in;
             progress.total_earnings = 0;
             progress.bump = ctx.bumps.user_progress;
         }
-
         if progress.purchase_count < 10 {
             progress.purchase_count += 1;
         }
-        
-        machine.total_sales += 1;
-
+        ctx.accounts.machine_config.total_sales += 1;
         emit!(ProgressIncremented {
-            user: progress.user, 
+            user: progress.user,
             new_count: progress.purchase_count,
         });
-
         Ok(())
     }
 
-    // record NFT Mint (called by backend after minting)
     pub fn set_nft_mint(
         ctx: Context<SetNftMint>,
         nft_mint: Pubkey,
     ) -> Result<()> {
         let progress = &mut ctx.accounts.user_progress;
-
         require!(progress.purchase_count >= 10, ErrorCode::InsufficientPurchases);
         require!(progress.nft_mint.is_none(), ErrorCode::NftAlreadyMinted);
-
         progress.nft_mint = Some(nft_mint);
-
         Ok(())
     }
 
-    // reset user progress after redeeming NFT
     pub fn reset_progress(ctx: Context<ResetProgress>) -> Result<()> {
         let progress = &mut ctx.accounts.user_progress;
-
         require!(progress.nft_mint.is_some(), ErrorCode::NoNftToRedeem);
-
         progress.purchase_count = 0;
         progress.nft_mint = None;
-
         Ok(())
     }
 
-    // buy report
     pub fn buy_report(
         ctx: Context<BuyReport>,
         report_type: ReportType,
@@ -148,7 +114,6 @@ pub mod solvend {
         let report = &mut ctx.accounts.report;
         let treasury = &mut ctx.accounts.treasury;
         let clock = Clock::get()?;
-
         let price = get_report_price(report_type);
 
         token::transfer(
@@ -163,7 +128,12 @@ pub mod solvend {
             price,
         )?;
 
-        let owner_share = price.checked_mul(10).unwrap().checked_div(100).unwrap();
+        let owner_share = price
+            .checked_mul(10)
+            .ok_or(ErrorCode::CalculationOverflow)?
+            .checked_div(100)
+            .ok_or(ErrorCode::CalculationOverflow)?;
+            
         token::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
@@ -187,8 +157,8 @@ pub mod solvend {
         report.created_at = clock.unix_timestamp;
         report.remaining_for_distribution = price - owner_share;
         report.merkle_root = None;
-        report.bump = ctx.bumps.report; 
-
+        report.bump = ctx.bumps.report;
+        
         treasury.total_collected += price;
         treasury.report_count += 1;
 
@@ -202,28 +172,22 @@ pub mod solvend {
         Ok(())
     }
 
-    // attach report data
     pub fn attach_report_data(
         ctx: Context<AttachReportData>,
         ipfs_cid: String,
     ) -> Result<()> {
         let report = &mut ctx.accounts.report;
-
         require!(report.status == ReportStatus::Pending, ErrorCode::ReportNotPending);
         require!(ipfs_cid.len() <= 64, ErrorCode::CidTooLong);
-
         report.ipfs_cid = Some(ipfs_cid);
-        report.status = ReportStatus::Ready; 
-
+        report.status = ReportStatus::Ready;
         emit!(ReportReady {
-            report_id: report.report_id, 
+            report_id: report.report_id,
             ipfs_cid: report.ipfs_cid.clone().unwrap(),
         });
-
         Ok(())
     }
 
-    // Called by backend to set the Merkle root for a report's distribution
     pub fn submit_distribution_root(
         ctx: Context<SubmitDistributionRoot>,
         merkle_root: [u8; 32],
@@ -231,39 +195,27 @@ pub mod solvend {
         let report = &mut ctx.accounts.report;
         require!(report.status == ReportStatus::Ready, ErrorCode::ReportNotReady);
         require!(report.merkle_root.is_none(), ErrorCode::DistributionRootAlreadySet);
-
         report.merkle_root = Some(merkle_root);
         report.status = ReportStatus::DistributionReady;
-        
         Ok(())
     }
 
-    // Called by the end-user to claim their share of the earnings
     pub fn claim_earnings(
         ctx: Context<ClaimEarnings>,
         amount: u64,
         proof: Vec<[u8; 32]>,
     ) -> Result<()> {
-        let report = &ctx.accounts.report;
+        let report = &mut ctx.accounts.report;
         let treasury = &ctx.accounts.treasury;
         let claimant = &ctx.accounts.claimant;
+        let merkle_root = report.merkle_root.ok_or(ErrorCode::DistributionNotReady)?;
 
         require!(report.status == ReportStatus::DistributionReady, ErrorCode::DistributionNotReady);
-        let merkle_root = report.merkle_root.ok_or(ErrorCode::DistributionNotReady)?;
-        
-        // Create the leaf node for the claimant
-        let leaf = keccak::hashv(&[
-            claimant.key().as_ref(), // <-- More idiomatic Rust
-            &amount.to_le_bytes(),
-        ]);
+        require!(amount <= report.remaining_for_distribution, ErrorCode::InsufficientFundsForClaim);
 
-        // Verify the proof
-        require!(
-            verify_merkle_proof(proof, merkle_root, leaf.to_bytes()),
-            ErrorCode::InvalidMerkleProof
-        );
-        
-        // Transfer funds
+        let leaf = keccak::hashv(&[claimant.key().as_ref(), &amount.to_le_bytes()]);
+        require!(verify_merkle_proof(proof, merkle_root, leaf.to_bytes()), ErrorCode::InvalidMerkleProof);
+
         token::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
@@ -276,7 +228,12 @@ pub mod solvend {
             ),
             amount,
         )?;
-        
+
+        report.remaining_for_distribution = report
+            .remaining_for_distribution
+            .checked_sub(amount)
+            .ok_or(ErrorCode::CalculationOverflow)?;
+
         let claim_record = &mut ctx.accounts.claim_record;
         claim_record.claimant = claimant.key();
         claim_record.report_id = report.report_id;
@@ -287,7 +244,6 @@ pub mod solvend {
     }
 }
 
-// ============ HELPER FUNCTION ============
 fn verify_merkle_proof(proof: Vec<[u8; 32]>, root: [u8; 32], leaf: [u8; 32]) -> bool {
     let mut computed_hash = leaf;
     for proof_element in proof.iter() {
@@ -300,9 +256,6 @@ fn verify_merkle_proof(proof: Vec<[u8; 32]>, root: [u8; 32], leaf: [u8; 32]) -> 
     computed_hash == root
 }
 
-
-// ============ ACCOUNT STRUCTURES ============
-
 #[account]
 pub struct MachineConfig {
     pub owner: Pubkey,
@@ -314,21 +267,21 @@ pub struct MachineConfig {
 
 #[account]
 pub struct Voucher {
-    pub user: Pubkey, 
-    pub hash_otp: [u8; 32], 
-    pub expiry_ts: i64, 
-    pub redeemed: bool, 
+    pub user: Pubkey,
+    pub hash_otp: [u8; 32],
+    pub expiry_ts: i64,
+    pub redeemed: bool,
     pub is_free: bool,
-    pub nonce: u64, 
+    pub nonce: u64,
     pub bump: u8,
 }
 
 #[account]
 pub struct UserProgress {
-    pub user: Pubkey, 
+    pub user: Pubkey,
     pub purchase_count: u8,
     pub nft_mint: Option<Pubkey>,
-    pub opt_in: bool, 
+    pub opt_in: bool,
     pub total_earnings: u64,
     pub bump: u8,
 }
@@ -346,11 +299,11 @@ pub struct Report {
     pub report_id: u64,
     pub buyer: Pubkey,
     pub report_type: ReportType,
-    pub timeframe_days: u8, 
+    pub timeframe_days: u8,
     pub paid_amount: u64,
     pub ipfs_cid: Option<String>,
-    pub status: ReportStatus, 
-    pub created_at: i64, 
+    pub status: ReportStatus,
+    pub created_at: i64,
     pub remaining_for_distribution: u64,
     pub merkle_root: Option<[u8; 32]>,
     pub bump: u8,
@@ -364,8 +317,6 @@ pub struct ClaimRecord {
     pub bump: u8,
 }
 
-
-// ============ ENUMS ============
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
 pub enum ReportType {
     Daily,
@@ -375,7 +326,7 @@ pub enum ReportType {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
 pub enum ReportStatus {
-    Pending, 
+    Pending,
     Ready,
     DistributionReady,
     Distributed,
@@ -383,13 +334,11 @@ pub enum ReportStatus {
 
 pub fn get_report_price(report_type: ReportType) -> u64 {
     match report_type {
-        ReportType::Daily => 1_000_000u64,      // 1 usdc (assuming 6 decimals)
-        ReportType::Weekly => 5_000_000u64,     // 5 usdc
-        ReportType::Monthly => 20_000_000u64,   // 20 usdc
+        ReportType::Daily => 1_000_000u64,
+        ReportType::Weekly => 5_000_000u64,
+        ReportType::Monthly => 20_000_000u64,
     }
 }
-
-// ============ CONTEXTS ============
 
 #[derive(Accounts)]
 pub struct InitializeMachine<'info> {
@@ -401,42 +350,35 @@ pub struct InitializeMachine<'info> {
         bump
     )]
     pub machine_config: Account<'info, MachineConfig>,
-
     #[account(mut)]
-    pub owner: Signer<'info>, 
-
+    pub owner: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct InitializeTreasury<'info> {
     #[account(
-        init, 
-        payer = authority, 
+        init,
+        payer = authority,
         space = 8 + 32 + 8 + 8 + 1,
         seeds = [b"treasury"],
         bump
     )]
     pub treasury: Account<'info, Treasury>,
-
     #[account(
         init,
         payer = authority,
-        token::mint = usdc_mint, 
-        token::authority = treasury, 
+        token::mint = usdc_mint,
+        token::authority = treasury,
         seeds = [b"treasury", b"usdtoken"],
         bump
     )]
-    pub treasury_token_account: Account <'info, TokenAccount>,
-
-    // <-- FIX 2: Correct type for usdc_mint
+    pub treasury_token_account: Account<'info, TokenAccount>,
     pub usdc_mint: Account<'info, Mint>,
-
     #[account(mut)]
     pub authority: Signer<'info>,
-
     pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>, 
+    pub token_program: Program<'info, Token>,
     pub rent: Sysvar<'info, Rent>,
 }
 
@@ -444,20 +386,19 @@ pub struct InitializeTreasury<'info> {
 #[instruction(nonce: u64)]
 pub struct CreateVoucher<'info> {
     #[account(
-        init, 
+        init,
         payer = authority,
         space = 8 + 32 + 32 + 8 + 1 + 1 + 8 + 1,
         seeds = [b"voucher", user.key().as_ref(), nonce.to_le_bytes().as_ref()],
         bump
     )]
     pub voucher: Account<'info, Voucher>,
-
     /// CHECK: User wallet receiving voucher
     pub user: AccountInfo<'info>,
-
-    #[account(mut)]
+    #[account(constraint = authority.key() == machine_config.owner @ ErrorCode::OwnerAccountMismatch)]
     pub authority: Signer<'info>,
-
+    #[account(seeds = [b"machine"], bump = machine_config.bump)]
+    pub machine_config: Account<'info, MachineConfig>,
     pub system_program: Program<'info, System>,
 }
 
@@ -469,30 +410,28 @@ pub struct RedeemVoucher<'info> {
         bump = voucher.bump
     )]
     pub voucher: Account<'info, Voucher>,
-    #[account(mut)]
+    #[account(constraint = authority.key() == machine_config.owner @ ErrorCode::OwnerAccountMismatch)]
     pub authority: Signer<'info>,
+    #[account(seeds = [b"machine"], bump = machine_config.bump)]
+    pub machine_config: Account<'info, MachineConfig>,
 }
 
 #[derive(Accounts)]
 pub struct IncrementProgress<'info> {
     #[account(
-        init_if_needed, 
-        payer = authority, 
-        space = 8 + 32 + 1 + 33 + 1 + 8 + 1, 
+        init_if_needed,
+        payer = authority,
+        space = 8 + 32 + 1 + 33 + 1 + 8 + 1,
         seeds = [b"user", user.key().as_ref()],
         bump
     )]
     pub user_progress: Account<'info, UserProgress>,
-
     #[account(mut, seeds = [b"machine"], bump = machine_config.bump)]
     pub machine_config: Account<'info, MachineConfig>,
-
     /// CHECK: user whose progress is being tracked
     pub user: AccountInfo<'info>,
-
-    #[account(mut)]
-    pub authority: Signer<'info>, 
-    
+    #[account(constraint = authority.key() == machine_config.owner @ ErrorCode::OwnerAccountMismatch)]
+    pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -504,18 +443,24 @@ pub struct SetNftMint<'info> {
         bump = user_progress.bump
     )]
     pub user_progress: Account<'info, UserProgress>,
+    #[account(constraint = authority.key() == machine_config.owner @ ErrorCode::OwnerAccountMismatch)]
     pub authority: Signer<'info>,
+    #[account(seeds = [b"machine"], bump = machine_config.bump)]
+    pub machine_config: Account<'info, MachineConfig>,
 }
 
 #[derive(Accounts)]
 pub struct ResetProgress<'info> {
     #[account(
-        mut, 
+        mut,
         seeds = [b"user", user_progress.user.as_ref()],
         bump = user_progress.bump
     )]
-    pub user_progress: Account<'info, UserProgress>, 
+    pub user_progress: Account<'info, UserProgress>,
+    #[account(constraint = authority.key() == machine_config.owner @ ErrorCode::OwnerAccountMismatch)]
     pub authority: Signer<'info>,
+    #[account(seeds = [b"machine"], bump = machine_config.bump)]
+    pub machine_config: Account<'info, MachineConfig>,
 }
 
 #[derive(Accounts)]
@@ -523,46 +468,45 @@ pub struct BuyReport<'info> {
     #[account(
         init,
         payer = buyer,
-        space = 8 + 150,
-        seeds = [b"report", treasury.report_count.to_le_bytes().as_ref()],
+        space = 8 + 178,
+        seeds = [b"report", buyer.key().as_ref(), treasury.report_count.to_le_bytes().as_ref()],
         bump
     )]
     pub report: Account<'info, Report>,
-
     #[account(mut, seeds = [b"treasury"], bump = treasury.bump)]
     pub treasury: Account<'info, Treasury>,
-
-    #[account(mut)]
+    #[account(mut, constraint = treasury_token_account.key() == treasury.token_account)]
     pub treasury_token_account: Account<'info, TokenAccount>,
-    
     #[account(mut)]
     pub buyer_token_account: Account<'info, TokenAccount>,
-
     #[account(
         mut,
         constraint = owner_token_account.owner == machine_config.owner @ ErrorCode::OwnerAccountMismatch
     )]
     pub owner_token_account: Account<'info, TokenAccount>,
-
     #[account(seeds = [b"machine"], bump = machine_config.bump)]
     pub machine_config: Account<'info, MachineConfig>,
-
     #[account(mut)]
     pub buyer: Signer<'info>,
-
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
+#[instruction(report_id: u64)]
 pub struct AttachReportData<'info> {
     #[account(
         mut,
-        seeds = [b"report", report.report_id.to_le_bytes().as_ref()],
+        seeds = [b"report", buyer.key().as_ref(), report_id.to_le_bytes().as_ref()],
         bump = report.bump
     )]
     pub report: Account<'info, Report>,
+    /// CHECK: The buyer of the report, needed for PDA validation.
+    pub buyer: AccountInfo<'info>,
+    #[account(constraint = authority.key() == machine_config.owner @ ErrorCode::OwnerAccountMismatch)]
     pub authority: Signer<'info>,
+    #[account(seeds = [b"machine"], bump = machine_config.bump)]
+    pub machine_config: Account<'info, MachineConfig>,
 }
 
 #[derive(Accounts)]
@@ -570,34 +514,37 @@ pub struct AttachReportData<'info> {
 pub struct SubmitDistributionRoot<'info> {
     #[account(
         mut,
-        seeds = [b"report", report_id.to_le_bytes().as_ref()],
+        seeds = [b"report", buyer.key().as_ref(), report_id.to_le_bytes().as_ref()],
         bump = report.bump
     )]
     pub report: Account<'info, Report>,
+    /// CHECK: The buyer of the report, needed for PDA validation.
+    pub buyer: AccountInfo<'info>,
+    #[account(constraint = authority.key() == machine_config.owner @ ErrorCode::OwnerAccountMismatch)]
     pub authority: Signer<'info>,
+    #[account(seeds = [b"machine"], bump = machine_config.bump)]
+    pub machine_config: Account<'info, MachineConfig>,
 }
 
 #[derive(Accounts)]
 #[instruction(report_id: u64)]
 pub struct ClaimEarnings<'info> {
     #[account(
-        seeds = [b"report", report_id.to_le_bytes().as_ref()],
+        mut,
+        seeds = [b"report", buyer.key().as_ref(), report_id.to_le_bytes().as_ref()],
         bump = report.bump
     )]
     pub report: Account<'info, Report>,
-
+    /// CHECK: The buyer of the report, needed for PDA validation.
+    pub buyer: AccountInfo<'info>,
     #[account(seeds = [b"treasury"], bump = treasury.bump)]
     pub treasury: Account<'info, Treasury>,
-
     #[account(mut, seeds=[b"treasury", b"usdtoken"], bump)]
     pub treasury_token_account: Account<'info, TokenAccount>,
-
     #[account(mut)]
     pub claimant_token_account: Account<'info, TokenAccount>,
-
     #[account(mut)]
     pub claimant: Signer<'info>,
-
     #[account(
         init,
         payer = claimant,
@@ -606,13 +553,10 @@ pub struct ClaimEarnings<'info> {
         bump
     )]
     pub claim_record: Account<'info, ClaimRecord>,
-
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
 
-
-// ============ EVENTS ============
 #[event]
 pub struct VoucherRedeemed {
     pub user: Pubkey,
@@ -621,7 +565,7 @@ pub struct VoucherRedeemed {
 }
 #[event]
 pub struct ProgressIncremented {
-    pub user: Pubkey, 
+    pub user: Pubkey,
     pub new_count: u8,
 }
 #[event]
@@ -629,15 +573,14 @@ pub struct ReportPurchased {
     pub report_id: u64,
     pub buyer: Pubkey,
     pub report_type: ReportType,
-    pub paid_amount: u64
+    pub paid_amount: u64,
 }
 #[event]
 pub struct ReportReady {
-    pub report_id: u64, 
+    pub report_id: u64,
     pub ipfs_cid: String,
 }
 
-// ============ ERRORS ============
 #[error_code]
 pub enum ErrorCode {
     #[msg("Invalid expiry timestamp")]
@@ -666,4 +609,8 @@ pub enum ErrorCode {
     InvalidMerkleProof,
     #[msg("Owner token account does not match machine owner")]
     OwnerAccountMismatch,
+    #[msg("Insufficient funds remaining for this claim")]
+    InsufficientFundsForClaim,
+    #[msg("Calculation overflow")]
+    CalculationOverflow,
 }
