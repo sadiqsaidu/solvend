@@ -2,7 +2,7 @@ import express from 'express';
 import 'dotenv/config';
 import { connectToDatabase } from './database/connect';
 import apiRoutes from './api/routes';
-import { startListener } from './listeners/blockchain.listener';
+import { startPaymentListener } from './listeners/blockchain.listener';
 
 async function main() {
   await connectToDatabase();
@@ -16,7 +16,7 @@ async function main() {
   
   app.listen(port, () => {
     console.log(`✅ API Server is running on http://localhost:${port}`);
-    startListener();
+    startPaymentListener();
   });
 }
 

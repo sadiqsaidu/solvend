@@ -1,51 +1,96 @@
-import { Connection, PublicKey, ParsedInstruction } from '@solana/web3.js';
+import { Connection, PublicKey, ParsedInstruction, PartiallyDecodedInstruction } from '@solana/web3.js';
 import { keccak256 } from 'js-sha3';
 import { Purchase } from '../database/models/purchase.model';
 import { createVoucherOnChain } from '../services/solana.service';
-import { sendOtpToUser } from '../services/notification.service';
+import fs from 'fs';
+import path from 'path';
+import * as anchor from '@project-serum/anchor';
 
-const connection = new Connection(process.env.SOLANA_RPC_HOST!, 'confirmed');
-const programId = new PublicKey(process.env.PROGRAM_ID!);
-const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcVnuNEbbYhS2soV4gp');
+const RPC = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
+const TREASURY_TOKEN_ACCOUNT = process.env.TREASURY_TOKEN_ACCOUNT!;
+const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfc';
+const BACKEND_WALLET_PATH = process.env.BACKEND_WALLET_PATH || './keys/backend.json';
+const PROGRAM_ID = process.env.PROGRAM_ID!;
+const POLL_INTERVAL_MS = 4000;
 
-export function startListener() {
-  console.log('💡 Starting blockchain listener for program:', programId.toBase58());
+function loadWalletKeypair() {
+  const kp = JSON.parse(fs.readFileSync(path.resolve(BACKEND_WALLET_PATH), 'utf8'));
+  return anchor.web3.Keypair.fromSecretKey(Uint8Array.from(kp));
+}
 
-  connection.onLogs(
-    programId,
-    async ({ signature }) => {
-      const tx = await connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0 });
-      if (!tx || tx.meta?.err) return;
+export function startPaymentListener() {
+  const connection = new Connection(RPC, 'confirmed');
+  const treasuryPubkey = new PublicKey(TREASURY_TOKEN_ACCOUNT);
+  const backendKeypair = loadWalletKeypair();
+  const seen = new Set<string>();
 
-      const instructions = tx.transaction.message.instructions;
-      const memoIx = instructions.find(
-        (ix) => ix.programId.equals(MEMO_PROGRAM_ID)
-      ) as ParsedInstruction | undefined;
+  console.log('[listener] Watching treasury:', treasuryPubkey.toBase58());
 
-      if (!memoIx || !('data' in memoIx) || typeof memoIx.data !== 'string') return;
+  setInterval(async () => {
+    try {
+      const signatures = await connection.getSignaturesForAddress(treasuryPubkey, { limit: 20 });
+      for (const sigInfo of signatures.reverse()) {
+        if (seen.has(sigInfo.signature)) continue;
+        seen.add(sigInfo.signature);
 
-      const referenceId = Buffer.from(memoIx.data, 'base64').toString('utf-8');
-      const userWallet = tx.transaction.message.accountKeys[0].pubkey;
+        const tx = await connection.getParsedTransaction(sigInfo.signature, { maxSupportedTransactionVersion: 0 });
+        if (!tx || tx.meta?.err) continue;
 
-      const purchase = await Purchase.findOne({ referenceId, status: 'PENDING' });
-      if (!purchase) return;
+        const instructions = tx.transaction.message.instructions as (
+          | ParsedInstruction
+          | PartiallyDecodedInstruction
+        )[];
 
-      const otp = Math.floor(1000 + Math.random() * 9000).toString();
-      const otpHash = Buffer.from(keccak256.digest(otp));
-      const nonce = Date.now();
+        // --- find memo instruction ---
+        let referenceId: string | null = null;
+        for (const ix of instructions as any[]) {
+          const programId = 'programId' in ix ? ix.programId.toString() : ix.program;
+          if (programId === MEMO_PROGRAM_ID) {
+            const data = ix.parsed?.info?.memo ?? ix.data ?? null;
+            if (typeof data === 'string') referenceId = data;
+            else if (data) referenceId = Buffer.from(data).toString('utf8');
+            break;
+          }
+        }
 
-      await createVoucherOnChain(userWallet, otpHash, nonce);
+        const payer = tx.transaction.message.accountKeys.find((k: any) => k.signer)?.pubkey;
+        if (!referenceId || !payer) continue;
 
-      purchase.transactionSignature = signature;
-      purchase.status = 'VOUCHER_CREATED';
-      purchase.otpHash = keccak256(otp);
-      purchase.otpExpiry = new Date(Date.now() + 3600 * 1000);
-      purchase.nonce = nonce;
-      await purchase.save();
+        const purchase = await Purchase.findOne({ referenceId, status: 'PENDING' });
+        if (!purchase) continue;
 
-      console.log(`Voucher created for purchase ${referenceId}. OTP: ${otp}`);
-      sendOtpToUser(userWallet.toBase58(), otp);
-    },
-    'confirmed'
-  );
+        const otp = Math.floor(1000 + Math.random() * 9000).toString();
+        const otpHashHex = keccak256(otp);
+        const otpHashBytes = Buffer.from(otpHashHex, 'hex');
+
+        purchase.otpHash = otpHashHex;
+        purchase.otpExpiry = new Date(Date.now() + 60 * 60 * 1000);
+        purchase.userWallet = payer.toBase58();
+        await purchase.save();
+
+        const nonce = Date.now();
+        try {
+          await createVoucherOnChain({
+            userPubkey: payer.toBase58(),
+            hashBytes: Array.from(otpHashBytes),
+            nonce,
+            backendKeypair,
+            programIdString: PROGRAM_ID,
+          });
+
+          purchase.status = 'VOUCHER_CREATED';
+          purchase.nonce = nonce;
+          await purchase.save();
+
+          console.log(`[listener] Voucher created for ${referenceId}, OTP=${otp}`);
+        } catch (err) {
+          console.error('[listener] createVoucher failed', err);
+          purchase.status = 'PENDING'; // fallback
+          await purchase.save();
+        }
+      }
+    } catch (err) {
+      console.error('[listener] poll error', err);
+    }
+  }, POLL_INTERVAL_MS);
 }
