@@ -5,6 +5,7 @@ export interface IPurchase extends Document {
   referenceId: string;
   transactionSignature?: string;
   userWallet: string;
+  amount?: number;
   otpHash?: string;
   otpExpiry?: Date;
   nonce?: number;
@@ -15,6 +16,7 @@ const PurchaseSchema = new Schema<IPurchase>({
   referenceId: { type: String, required: true, unique: true, index: true },
   transactionSignature: { type: String },
   userWallet: { type: String, required: true },
+  amount: { type: Number },
   otpHash: { type: String },
   otpExpiry: { type: Date },
   nonce: { type: Number },
