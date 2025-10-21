@@ -1,5 +1,6 @@
 [toolchain]
 package_manager = "yarn"
+anchor_version = "0.30.1"
 
 [features]
 resolution = true
@@ -12,7 +13,7 @@ solvend = "FGWgre3gcnWmAod7vDuL7ziMV28bgSrG7ng69g1kZfUW"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [test]

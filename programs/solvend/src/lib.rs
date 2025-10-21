@@ -395,7 +395,7 @@ pub struct CreateVoucher<'info> {
     pub voucher: Account<'info, Voucher>,
     /// CHECK: User wallet receiving voucher
     pub user: AccountInfo<'info>,
-    #[account(constraint = authority.key() == machine_config.owner @ ErrorCode::OwnerAccountMismatch)]
+    #[account(mut, constraint = authority.key() == machine_config.owner @ ErrorCode::OwnerAccountMismatch)]
     pub authority: Signer<'info>,
     #[account(seeds = [b"machine"], bump = machine_config.bump)]
     pub machine_config: Account<'info, MachineConfig>,
@@ -430,7 +430,7 @@ pub struct IncrementProgress<'info> {
     pub machine_config: Account<'info, MachineConfig>,
     /// CHECK: user whose progress is being tracked
     pub user: AccountInfo<'info>,
-    #[account(constraint = authority.key() == machine_config.owner @ ErrorCode::OwnerAccountMismatch)]
+    #[account(mut, constraint = authority.key() == machine_config.owner @ ErrorCode::OwnerAccountMismatch)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
