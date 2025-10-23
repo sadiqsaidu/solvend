@@ -7,11 +7,13 @@ const RPC = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 export async function createVoucherOnChain(opts: {
   userPubkey: string;
   hashBytes: number[];
+  expiryTs: number;
+  isFree: boolean;
   nonce: number;
   backendKeypair: Keypair;
   programIdString?: string;
 }) {
-  const { userPubkey, hashBytes, nonce, backendKeypair, programIdString } = opts;
+  const { userPubkey, hashBytes, expiryTs, isFree, nonce, backendKeypair, programIdString } = opts;
 
   const connection = new anchor.web3.Connection(RPC, 'confirmed');
   const wallet = new anchor.Wallet(backendKeypair);
@@ -29,8 +31,9 @@ export async function createVoucherOnChain(opts: {
     program.programId
   );
 
+  // createVoucher(hash_otp: [u8;32], expiry_ts: i64, is_free: bool, nonce: u64)
   const tx = await program.methods
-    .createVoucher(hashBytes, new anchor.BN(nonce))
+    .createVoucher(hashBytes, new anchor.BN(expiryTs), isFree, new anchor.BN(nonce))
     .accounts({
       voucher: voucherPda,
       user: userPk,

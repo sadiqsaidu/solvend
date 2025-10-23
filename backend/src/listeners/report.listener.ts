@@ -8,7 +8,7 @@ import * as anchor from '@project-serum/anchor';
 
 const RPC = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 const TREASURY_TOKEN_ACCOUNT = process.env.TREASURY_TOKEN_ACCOUNT!;
-const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfc';
+const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 const BACKEND_WALLET_PATH = process.env.BACKEND_WALLET_PATH || './keys/backend.json';
 const PROGRAM_ID = process.env.PROGRAM_ID!;
 const POLL_INTERVAL_MS = 4000;
@@ -53,8 +53,9 @@ export function startReportListener() {
           }
         }
 
-        const payer = tx.transaction.message.accountKeys.find((k: any) => k.signer)?.pubkey;
-        if (!referenceId || !payer) continue;
+  const payerRaw = tx.transaction.message.accountKeys.find((k: any) => k.signer)?.pubkey;
+  const payer = typeof payerRaw === 'string' ? payerRaw : (payerRaw?.toString ? payerRaw.toString() : null);
+  if (!referenceId || !payer) continue;
 
         // Check if this is a report purchase
         const report = await Report.findOne({ referenceId, status: 'PENDING' });
@@ -67,7 +68,7 @@ export function startReportListener() {
           const timeframeDays = 1;
 
           await buyReportOnChain({
-            buyerPubkey: payer.toBase58(),
+            buyerPubkey: payer,
             reportType,
             timeframeDays,
             backendKeypair,

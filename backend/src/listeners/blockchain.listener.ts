@@ -8,7 +8,7 @@ import * as anchor from '@project-serum/anchor';
 
 const RPC = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 const TREASURY_TOKEN_ACCOUNT = process.env.TREASURY_TOKEN_ACCOUNT!;
-const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfc';
+const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 const BACKEND_WALLET_PATH = process.env.BACKEND_WALLET_PATH || './keys/backend.json';
 const PROGRAM_ID = process.env.PROGRAM_ID!;
 const POLL_INTERVAL_MS = 4000;
@@ -53,8 +53,10 @@ export function startPaymentListener() {
           }
         }
 
-        const payer = tx.transaction.message.accountKeys.find((k: any) => k.signer)?.pubkey;
-        if (!referenceId || !payer) continue;
+  const payerRaw = tx.transaction.message.accountKeys.find((k: any) => k.signer)?.pubkey;
+  // normalize payer to a pubkey string
+  const payer = typeof payerRaw === 'string' ? payerRaw : (payerRaw?.toString ? payerRaw.toString() : null);
+  if (!referenceId || !payer) continue;
 
         const purchase = await Purchase.findOne({ referenceId, status: 'PENDING' });
         if (!purchase) continue;
@@ -65,14 +67,19 @@ export function startPaymentListener() {
 
         purchase.otpHash = otpHashHex;
         purchase.otpExpiry = new Date(Date.now() + 60 * 60 * 1000);
-        purchase.userWallet = payer.toBase58();
+        purchase.userWallet = payer;
         await purchase.save();
 
         const nonce = Date.now();
         try {
+          // expiry_ts in seconds and is_free flag (false by default)
+          const expiryTs = Math.floor(Date.now() / 1000) + 60 * 60; // 1 hour expiry
+          const isFree = false;
           await createVoucherOnChain({
-            userPubkey: payer.toBase58(),
+            userPubkey: payer,
             hashBytes: Array.from(otpHashBytes),
+            expiryTs,
+            isFree,
             nonce,
             backendKeypair,
             programIdString: PROGRAM_ID,
