@@ -17,8 +17,14 @@ async function main() {
   
   app.listen(port, () => {
     console.log(`✅ API Server is running on http://localhost:${port}`);
-    startPaymentListener();
-    startReportListener();
+    
+    // Listeners disabled - using immediate confirmation via /api/purchase/confirm instead
+    // This avoids RPC rate limiting from free Solana devnet
+    // Uncomment if using paid RPC or for production with webhooks
+    // startPaymentListener();
+    // startReportListener();
+    
+    console.log('ℹ️  Using immediate payment confirmation (listeners disabled)');
   });
 }
 

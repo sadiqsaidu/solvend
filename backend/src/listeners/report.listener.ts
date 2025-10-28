@@ -11,7 +11,7 @@ const TREASURY_TOKEN_ACCOUNT = process.env.TREASURY_TOKEN_ACCOUNT!;
 const MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 const BACKEND_WALLET_PATH = process.env.BACKEND_WALLET_PATH || './keys/backend.json';
 const PROGRAM_ID = process.env.PROGRAM_ID!;
-const POLL_INTERVAL_MS = 4000;
+const POLL_INTERVAL_MS = 10000; // Increased to 10 seconds to avoid rate limiting
 
 function loadWalletKeypair() {
   const kp = JSON.parse(fs.readFileSync(path.resolve(BACKEND_WALLET_PATH), 'utf8'));

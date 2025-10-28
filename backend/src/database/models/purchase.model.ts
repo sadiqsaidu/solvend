@@ -7,9 +7,12 @@ export interface IPurchase extends Document {
   userWallet: string;
   amount?: number;
   otpHash?: string;
+  otp?: string; // Plain OTP for development (remove in production)
   otpExpiry?: Date;
   nonce?: number;
   status: 'PENDING' | 'VOUCHER_CREATED' | 'REDEEMED' | 'EXPIRED';
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const PurchaseSchema = new Schema<IPurchase>({
@@ -18,6 +21,7 @@ const PurchaseSchema = new Schema<IPurchase>({
   userWallet: { type: String, required: true },
   amount: { type: Number },
   otpHash: { type: String },
+  otp: { type: String }, // Plain OTP for development (remove in production)
   otpExpiry: { type: Date },
   nonce: { type: Number },
   status: { 
