@@ -2,8 +2,10 @@
 import { Request, Response } from 'express';
 import { Report, ReportType, getReportPrice } from '../../database/models/report.model';
 import { v4 as uuidv4 } from 'uuid';
+// --- FIXED IMPORTS ---
 import { getBuyReportAccounts } from '../../services/solana.service'; // <-- ADDED
 import { PublicKey } from '@solana/web3.js'; // <-- ADDED
+// --- END FIX ---
 
 export async function createReportPurchaseHandler(req: Request, res: Response) {
   try {
@@ -73,6 +75,7 @@ export async function createReportPurchaseHandler(req: Request, res: Response) {
   }
 }
 
+// --- START OF FIX ---
 // NEW HANDLER: called by the frontend after payment is confirmed (report is PAID)
 export async function executeReportPurchaseHandler(req: Request, res: Response) {
   try {
@@ -138,3 +141,4 @@ export async function executeReportPurchaseHandler(req: Request, res: Response) 
     return res.status(500).json({ error: errorMessage });
   }
 }
+// --- END OF FIX ---
