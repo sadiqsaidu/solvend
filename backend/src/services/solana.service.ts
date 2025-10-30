@@ -6,7 +6,7 @@ const RPC = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 
 export async function createVoucherOnChain(opts: {
   userPubkey: string;
-  hashBytes: number[];
+  hashBytes: Buffer;
   expiryTs: number;
   isFree: boolean;
   nonce: number;
@@ -14,6 +14,11 @@ export async function createVoucherOnChain(opts: {
   programIdString?: string;
 }) {
   const { userPubkey, hashBytes, expiryTs, isFree, nonce, backendKeypair, programIdString } = opts;
+
+  // Safety check
+  if (hashBytes.length !== 32) {
+    throw new Error('hashBytes must be exactly 32 bytes');
+  }
 
   const connection = new anchor.web3.Connection(RPC, 'confirmed');
   const wallet = new anchor.Wallet(backendKeypair);
@@ -31,6 +36,12 @@ export async function createVoucherOnChain(opts: {
     program.programId
   );
 
+  // Fetch machineConfig PDA
+  const [machineConfigPda] = await PublicKey.findProgramAddress(
+    [Buffer.from('machine')],
+    program.programId
+  );
+
   // createVoucher(hash_otp: [u8;32], expiry_ts: i64, is_free: bool, nonce: u64)
   const tx = await program.methods
     .createVoucher(hashBytes, new anchor.BN(expiryTs), isFree, new anchor.BN(nonce))
@@ -38,6 +49,7 @@ export async function createVoucherOnChain(opts: {
       voucher: voucherPda,
       user: userPk,
       authority: backendKeypair.publicKey,
+      machineConfig: machineConfigPda,
       systemProgram: anchor.web3.SystemProgram.programId,
     })
     .signers([backendKeypair])
@@ -64,12 +76,19 @@ export async function redeemVoucherOnChain(opts: {
   const program = new anchor.Program(idl as any, programId, provider);
 
   const userPk = new PublicKey(userPubkey);
+
+  // Fetch machineConfig PDA
+  const [machineConfigPda] = await PublicKey.findProgramAddress(
+    [Buffer.from('machine')],
+    program.programId
+  );
+
   const tx = await program.methods
     .redeemVoucher()
     .accounts({
       voucher: voucherPda,
-      user: userPk,
       authority: backendKeypair.publicKey,
+      machineConfig: machineConfigPda,
     })
     .signers([backendKeypair])
     .rpc();

@@ -58,7 +58,7 @@ export async function validateOtpHandler(req: Request, res: Response) {
 
         await createVoucherOnChain({
           userPubkey: purchase.userWallet,
-          hashBytes: Array.from(otpHashBytes),
+          hashBytes: otpHashBytes,
           expiryTs,
           isFree,
           nonce,
@@ -233,7 +233,7 @@ export async function confirmPaymentHandler(req: Request, res: Response) {
 
       await createVoucherOnChain({
         userPubkey: purchase.userWallet,
-        hashBytes: Array.from(otpHashBytes),
+        hashBytes: otpHashBytes,
         expiryTs,
         isFree,
         nonce,
