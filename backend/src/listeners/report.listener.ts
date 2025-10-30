@@ -12,25 +12,35 @@ const BACKEND_WALLET_PATH = process.env.BACKEND_WALLET_PATH || './keys/backend.j
 const POLL_INTERVAL_MS = 4000;
 
 function loadWalletKeypair() {
-  const kp = JSON.parse(fs.readFileSync(path.resolve(BACKEND_WALLET_PATH), 'utf8'));
+  const kp = JSON.parse(
+    fs.readFileSync(path.resolve(BACKEND_WALLET_PATH), "utf8")
+  );
   return anchor.web3.Keypair.fromSecretKey(Uint8Array.from(kp));
 }
 
 export function startReportListener() {
-  const connection = new Connection(RPC, 'confirmed');
+  const connection = new Connection(RPC, "confirmed");
   const treasuryPubkey = new PublicKey(TREASURY_TOKEN_ACCOUNT);
   const seen = new Set<string>();
 
-  console.log('[report-listener] Watching treasury for report payments:', treasuryPubkey.toBase58());
+  console.log(
+    "[report-listener] Watching treasury for report payments:",
+    treasuryPubkey.toBase58()
+  );
 
   setInterval(async () => {
     try {
-      const signatures = await connection.getSignaturesForAddress(treasuryPubkey, { limit: 20 });
+      const signatures = await connection.getSignaturesForAddress(
+        treasuryPubkey,
+        { limit: 20 }
+      );
       for (const sigInfo of signatures.reverse()) {
         if (seen.has(sigInfo.signature)) continue;
         seen.add(sigInfo.signature);
 
-        const tx = await connection.getParsedTransaction(sigInfo.signature, { maxSupportedTransactionVersion: 0 });
+        const tx = await connection.getParsedTransaction(sigInfo.signature, {
+          maxSupportedTransactionVersion: 0,
+        });
         if (!tx || tx.meta?.err) continue;
 
         const instructions = tx.transaction.message.instructions as (
@@ -41,11 +51,12 @@ export function startReportListener() {
         // Find memo instruction
         let referenceId: string | null = null;
         for (const ix of instructions as any[]) {
-          const programId = 'programId' in ix ? ix.programId.toString() : ix.program;
+          const programId =
+            "programId" in ix ? ix.programId.toString() : ix.program;
           if (programId === MEMO_PROGRAM_ID) {
             const data = ix.parsed?.info?.memo ?? ix.data ?? null;
-            if (typeof data === 'string') referenceId = data;
-            else if (data) referenceId = Buffer.from(data).toString('utf8');
+            if (typeof data === "string") referenceId = data;
+            else if (data) referenceId = Buffer.from(data).toString("utf8");
             break;
           }
         }
@@ -55,7 +66,7 @@ export function startReportListener() {
         if (!referenceId || !payer) continue;
 
         // Check if this is a report purchase
-        const report = await Report.findOne({ referenceId, status: 'PENDING' });
+        const report = await Report.findOne({ referenceId, status: "PENDING" });
         if (!report) continue;
 
         try {
@@ -80,7 +91,7 @@ export function startReportListener() {
         }
       }
     } catch (err) {
-      console.error('[report-listener] poll error', err);
+      console.error("[report-listener] poll error", err);
     }
   }, POLL_INTERVAL_MS);
 }
