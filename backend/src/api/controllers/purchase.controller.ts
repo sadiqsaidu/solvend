@@ -44,7 +44,8 @@ export async function validateOtpHandler(req: Request, res: Response) {
     // If voucher hasn't been created yet, create it now
     if (purchase.status === "PENDING") {
       console.log("[validateOtp] Voucher not created yet, creating now...");
-      const otpHashBytes = Buffer.from(purchase.otpHash!, "hex");
+      // FIX #1 — convert Buffer to number[]
+      const otpHashBytes = Array.from(Buffer.from(purchase.otpHash!, "hex"));
       const nonce = Date.now();
       const expiryTs = Math.floor(
         (purchase.otpExpiry?.getTime() || Date.now() + 3600000) / 1000
@@ -208,7 +209,8 @@ export async function confirmPaymentHandler(req: Request, res: Response) {
     // Generate OTP immediately
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
     const otpHashHex = keccak256(otp);
-    const otpHashBytes = Buffer.from(otpHashHex, "hex");
+    // FIX #2 — convert Buffer to number[]
+    const otpHashBytes = Array.from(Buffer.from(otpHashHex, "hex"));
 
     purchase.transactionSignature = transactionSignature;
     purchase.otp = otp;

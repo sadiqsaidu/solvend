@@ -1,6 +1,6 @@
 import * as anchor from "@project-serum/anchor";
 import { PublicKey, Keypair } from "@solana/web3.js";
-import idl from "../../../target/idl/solvend.json"; 
+import idl from "../idl/solvend.json"; 
 
 const RPC = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
 
