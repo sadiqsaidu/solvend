@@ -60,7 +60,6 @@ export function startReportListener() {
         if (!report) continue;
 
         try {
-          // --- FIXED LOGIC START ---
           // The listener only verifies the payment and updates the DB.
           report.status = 'PAID';
           report.transactionSignature = sigInfo.signature;
@@ -75,7 +74,6 @@ export function startReportListener() {
 
           await report.save();
           console.log(`[report-listener] Report ${report.reportId} (Ref: ${referenceId}) marked as PAID.`);
-          // --- FIXED LOGIC END ---
         } catch (err) {
           console.error('[report-listener] Failed to update report status', err);
         }
