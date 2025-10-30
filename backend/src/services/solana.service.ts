@@ -1,9 +1,12 @@
-import * as anchor from '@project-serum/anchor';
-import { PublicKey, Keypair } from '@solana/web3.js';
-import idl from '../../../target/idl/solvend.json'; // adjust to your IDL
+import * as anchor from "@project-serum/anchor";
+import { PublicKey, Keypair } from "@solana/web3.js";
+import idl from "../../../target/idl/solvend.json"; // adjust path to your IDL
 
-const RPC = process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com';
+const RPC = process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
 
+/**
+ * Create a voucher on-chain — backend signs
+ */
 export async function createVoucherOnChain(opts: {
   userPubkey: string;
   hashBytes: number[];
@@ -15,23 +18,22 @@ export async function createVoucherOnChain(opts: {
 }) {
   const { userPubkey, hashBytes, expiryTs, isFree, nonce, backendKeypair, programIdString } = opts;
 
-  const connection = new anchor.web3.Connection(RPC, 'confirmed');
+  const connection = new anchor.web3.Connection(RPC, "confirmed");
   const wallet = new anchor.Wallet(backendKeypair);
   const provider = new anchor.AnchorProvider(connection, wallet, {
-    preflightCommitment: 'confirmed',
+    preflightCommitment: "confirmed",
   });
 
   const programId = new PublicKey(programIdString || process.env.PROGRAM_ID!);
   const program = new anchor.Program(idl as any, programId, provider);
 
   const userPk = new PublicKey(userPubkey);
-  const nonceBytes = new anchor.BN(nonce).toArrayLike(Buffer, 'le', 8);
+  const nonceBytes = new anchor.BN(nonce).toArrayLike(Buffer, "le", 8);
   const [voucherPda] = await PublicKey.findProgramAddress(
-    [Buffer.from('voucher'), userPk.toBuffer(), Buffer.from(nonceBytes)],
+    [Buffer.from("voucher"), userPk.toBuffer(), Buffer.from(nonceBytes)],
     program.programId
   );
 
-  // createVoucher(hash_otp: [u8;32], expiry_ts: i64, is_free: bool, nonce: u64)
   const tx = await program.methods
     .createVoucher(hashBytes, new anchor.BN(expiryTs), isFree, new anchor.BN(nonce))
     .accounts({
@@ -43,10 +45,13 @@ export async function createVoucherOnChain(opts: {
     .signers([backendKeypair])
     .rpc();
 
-  console.log('[solana.service] createVoucher tx', tx);
+  console.log("[solana.service] createVoucher tx", tx);
   return tx;
 }
 
+/**
+ * Redeem a voucher on-chain — backend signs
+ */
 export async function redeemVoucherOnChain(opts: {
   userPubkey: string;
   voucherPda: PublicKey;
@@ -55,15 +60,18 @@ export async function redeemVoucherOnChain(opts: {
   programIdString?: string;
 }) {
   const { userPubkey, voucherPda, backendKeypair, programIdString } = opts;
-  const connection = new anchor.web3.Connection(RPC, 'confirmed');
+
+  const connection = new anchor.web3.Connection(RPC, "confirmed");
   const wallet = new anchor.Wallet(backendKeypair);
   const provider = new anchor.AnchorProvider(connection, wallet, {
-    preflightCommitment: 'confirmed',
+    preflightCommitment: "confirmed",
   });
+
   const programId = new PublicKey(programIdString || process.env.PROGRAM_ID!);
   const program = new anchor.Program(idl as any, programId, provider);
 
   const userPk = new PublicKey(userPubkey);
+
   const tx = await program.methods
     .redeemVoucher()
     .accounts({
@@ -74,90 +82,83 @@ export async function redeemVoucherOnChain(opts: {
     .signers([backendKeypair])
     .rpc();
 
-  console.log('[solana.service] redeemVoucher tx', tx);
+  console.log("[solana.service] redeemVoucher tx", tx);
   return tx;
 }
 
-export async function buyReportOnChain(opts: {
+/**
+ * getBuyReportAccounts — Backend prepares all PDAs and account addresses
+ * for the frontend to build and send the transaction.
+ */
+export async function getBuyReportAccounts(opts: {
   buyerPubkey: string;
+  buyerTokenAccountPubkey: string; // Frontend provides user's USDC ATA
   reportType: number; // 0=Daily, 1=Weekly, 2=Monthly
   timeframeDays: number;
-  backendKeypair: Keypair;
   programIdString?: string;
 }) {
-  const { buyerPubkey, reportType, timeframeDays, backendKeypair, programIdString } = opts;
-  const connection = new anchor.web3.Connection(RPC, 'confirmed');
-  const wallet = new anchor.Wallet(backendKeypair);
-  const provider = new anchor.AnchorProvider(connection, wallet, {
-    preflightCommitment: 'confirmed',
+  const { buyerPubkey, buyerTokenAccountPubkey, programIdString } = opts;
+
+  const connection = new anchor.web3.Connection(RPC, "confirmed");
+  const dummyWallet = new anchor.Wallet(Keypair.generate());
+  const provider = new anchor.AnchorProvider(connection, dummyWallet, {
+    preflightCommitment: "confirmed",
   });
+
   const programId = new PublicKey(programIdString || process.env.PROGRAM_ID!);
   const program = new anchor.Program(idl as any, programId, provider);
-
   const buyerPk = new PublicKey(buyerPubkey);
-  
-  // Get treasury account to get current report count
-  const [treasuryPda] = await PublicKey.findProgramAddress(
-    [Buffer.from('treasury')],
-    programId
-  );
-  
+
+  // Treasury PDA
+  const [treasuryPda] = await PublicKey.findProgramAddress([Buffer.from("treasury")], programId);
   const treasuryAccount = await program.account.treasury.fetch(treasuryPda);
-  const reportId = (treasuryAccount as any).reportCount;
+  const reportId = new anchor.BN((treasuryAccount as any).reportCount); // report_id for next report
 
-  // Get machine config for owner token account
-  const [machinePda] = await PublicKey.findProgramAddress(
-    [Buffer.from('machine')],
-    programId
-  );
-  
+  // Machine config PDA
+  const [machinePda] = await PublicKey.findProgramAddress([Buffer.from("machine")], programId);
   const machineAccount = await program.account.machineConfig.fetch(machinePda);
-  
-  // Get treasury token account
+
+  // Treasury token PDA
   const [treasuryTokenPda] = await PublicKey.findProgramAddress(
-    [Buffer.from('treasury'), Buffer.from('usdtoken')],
+    [Buffer.from("treasury"), Buffer.from("usdtoken")],
     programId
   );
 
-  // Get buyer token account (assuming USDC)
-  const buyerTokenAccount = await connection.getTokenAccountsByOwner(buyerPk, {
-    mint: new PublicKey(process.env.USDC_MINT!),
-  });
+  const buyerTokenAccount = new PublicKey(buyerTokenAccountPubkey);
 
-  if (buyerTokenAccount.value.length === 0) {
-    throw new Error('Buyer has no USDC token account');
+  // Owner token account
+  const ownerTokenAccounts = await connection.getTokenAccountsByOwner(
+    (machineAccount as any).owner,
+    { mint: new PublicKey(process.env.USDC_MINT!) }
+  );
+  if (ownerTokenAccounts.value.length === 0) {
+    throw new Error("Owner has no USDC token account.");
   }
+  const ownerTokenAccount = ownerTokenAccounts.value[0].pubkey;
 
-  // Get owner token account
-  const ownerTokenAccount = await connection.getTokenAccountsByOwner((machineAccount as any).owner, {
-    mint: new PublicKey(process.env.USDC_MINT!),
-  });
+  // Report PDA
+  const [reportPda] = await PublicKey.findProgramAddress(
+    [Buffer.from("report"), buyerPk.toBuffer(), reportId.toArrayLike(Buffer, "le", 8)],
+    programId
+  );
 
-  if (ownerTokenAccount.value.length === 0) {
-    throw new Error('Owner has no USDC token account');
-  }
-
-  const tx = await program.methods
-    .buyReport(reportType, timeframeDays)
-    .accounts({
-      report: await PublicKey.findProgramAddress(
-        [Buffer.from('report'), buyerPk.toBuffer(), Buffer.from(reportId.toString().padStart(8, '0'), 'hex')],
-        programId
-      ).then(([pda]) => pda),
-      treasury: treasuryPda,
-      treasuryTokenAccount: treasuryTokenPda,
-      buyerTokenAccount: buyerTokenAccount.value[0].pubkey,
-      ownerTokenAccount: ownerTokenAccount.value[0].pubkey,
-      machineConfig: machinePda,
-      buyer: buyerPk,
-    })
-    .signers([backendKeypair])
-    .rpc();
-
-  console.log('[solana.service] buyReport tx', tx);
-  return tx;
+  return {
+    reportPda,
+    treasuryPda,
+    treasuryTokenPda,
+    buyerTokenAccount,
+    ownerTokenAccount,
+    machinePda,
+    buyerPk,
+    tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
+    systemProgram: anchor.web3.SystemProgram.programId,
+    reportId: reportId.toNumber(),
+  };
 }
 
+/**
+ * Attach report data (IPFS CID) — backend signs (authorized action)
+ */
 export async function attachReportDataOnChain(opts: {
   reportId: number;
   buyerPubkey: string;
@@ -166,25 +167,21 @@ export async function attachReportDataOnChain(opts: {
   programIdString?: string;
 }) {
   const { reportId, buyerPubkey, ipfsCid, backendKeypair, programIdString } = opts;
-  const connection = new anchor.web3.Connection(RPC, 'confirmed');
+
+  const connection = new anchor.web3.Connection(RPC, "confirmed");
   const wallet = new anchor.Wallet(backendKeypair);
   const provider = new anchor.AnchorProvider(connection, wallet, {
-    preflightCommitment: 'confirmed',
+    preflightCommitment: "confirmed",
   });
+
   const programId = new PublicKey(programIdString || process.env.PROGRAM_ID!);
   const program = new anchor.Program(idl as any, programId, provider);
-
   const buyerPk = new PublicKey(buyerPubkey);
-  
-  // Get machine config
-  const [machinePda] = await PublicKey.findProgramAddress(
-    [Buffer.from('machine')],
-    programId
-  );
 
-  // Get report PDA
+  const [machinePda] = await PublicKey.findProgramAddress([Buffer.from("machine")], programId);
+
   const [reportPda] = await PublicKey.findProgramAddress(
-    [Buffer.from('report'), buyerPk.toBuffer(), Buffer.from(reportId.toString().padStart(8, '0'), 'hex')],
+    [Buffer.from("report"), buyerPk.toBuffer(), new anchor.BN(reportId).toArrayLike(Buffer, "le", 8)],
     programId
   );
 
@@ -199,10 +196,13 @@ export async function attachReportDataOnChain(opts: {
     .signers([backendKeypair])
     .rpc();
 
-  console.log('[solana.service] attachReportData tx', tx);
+  console.log("[solana.service] attachReportData tx", tx);
   return tx;
 }
 
+/**
+ * Submit Merkle distribution root — backend signs (authorized action)
+ */
 export async function submitDistributionRootOnChain(opts: {
   reportId: number;
   buyerPubkey: string;
@@ -211,25 +211,21 @@ export async function submitDistributionRootOnChain(opts: {
   programIdString?: string;
 }) {
   const { reportId, buyerPubkey, merkleRoot, backendKeypair, programIdString } = opts;
-  const connection = new anchor.web3.Connection(RPC, 'confirmed');
+
+  const connection = new anchor.web3.Connection(RPC, "confirmed");
   const wallet = new anchor.Wallet(backendKeypair);
   const provider = new anchor.AnchorProvider(connection, wallet, {
-    preflightCommitment: 'confirmed',
+    preflightCommitment: "confirmed",
   });
+
   const programId = new PublicKey(programIdString || process.env.PROGRAM_ID!);
   const program = new anchor.Program(idl as any, programId, provider);
-
   const buyerPk = new PublicKey(buyerPubkey);
-  
-  // Get machine config
-  const [machinePda] = await PublicKey.findProgramAddress(
-    [Buffer.from('machine')],
-    programId
-  );
 
-  // Get report PDA
+  const [machinePda] = await PublicKey.findProgramAddress([Buffer.from("machine")], programId);
+
   const [reportPda] = await PublicKey.findProgramAddress(
-    [Buffer.from('report'), buyerPk.toBuffer(), Buffer.from(reportId.toString().padStart(8, '0'), 'hex')],
+    [Buffer.from("report"), buyerPk.toBuffer(), new anchor.BN(reportId).toArrayLike(Buffer, "le", 8)],
     programId
   );
 
@@ -244,6 +240,6 @@ export async function submitDistributionRootOnChain(opts: {
     .signers([backendKeypair])
     .rpc();
 
-  console.log('[solana.service] submitDistributionRoot tx', tx);
+  console.log("[solana.service] submitDistributionRoot tx", tx);
   return tx;
 }

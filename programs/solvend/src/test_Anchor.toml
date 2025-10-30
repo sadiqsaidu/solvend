@@ -1,0 +1,98 @@
+# filepath: /home/khaljr/dev/solvend/test_Anchor.toml
+# Descriptive test manifest for Anchor.toml. A small runner should parse this file
+# and execute tests against the Anchor.toml in the same directory.
+
+[[tests]]
+id = "toolchain_package_manager"
+description = "toolchain.package_manager must be 'yarn'"
+type = "equals"
+key_path = "toolchain.package_manager"
+expected = "yarn"
+severity = "error"
+
+[[tests]]
+id = "anchor_version"
+description = "toolchain.anchor_version must be '0.30.1'"
+type = "equals"
+key_path = "toolchain.anchor_version"
+expected = "0.30.1"
+severity = "error"
+
+[[tests]]
+id = "features_resolution"
+description = "features.resolution must be true"
+type = "equals"
+key_path = "features.resolution"
+expected = true
+severity = "error"
+
+[[tests]]
+id = "features_skip_lint"
+description = "features.skip-lint must be false"
+type = "equals"
+key_path = "features.skip-lint"
+expected = false
+severity = "warning"
+
+[[tests]]
+id = "programs_localnet_solvend_exists"
+description = "programs.localnet.solvend key must exist and be non-empty"
+type = "exists"
+key_path = "programs.localnet.solvend"
+target = "key"
+severity = "error"
+
+[[tests]]
+id = "programs_localnet_solvend_format"
+description = "programs.localnet.solvend should look like a Solana base58 pubkey (~44 chars)"
+type = "regex"
+key_path = "programs.localnet.solvend"
+pattern = "^[1-9A-HJ-NP-Za-km-z]{32,44}$"
+severity = "warning"
+
+[[tests]]
+id = "registry_url_https"
+description = "registry.url must be an https URL"
+type = "regex"
+key_path = "registry.url"
+pattern = "^https://.+"
+severity = "error"
+
+[[tests]]
+id = "provider_cluster"
+description = "provider.cluster must be 'devnet' or 'localnet'"
+type = "regex"
+key_path = "provider.cluster"
+pattern = "^(devnet|localnet)$"
+severity = "error"
+
+[[tests]]
+id = "provider_wallet_file_exists"
+description = "provider.wallet file must exist on disk (tilde expansion allowed)"
+type = "exists"
+key_path = "provider.wallet"
+target = "file"
+severity = "warning"
+
+[[tests]]
+id = "test_startup_wait_min"
+description = "test.startup_wait should be at least 30000 (ms)"
+type = "min"
+key_path = "test.startup_wait"
+min_value = 30000
+severity = "warning"
+
+[[tests]]
+id = "scripts_test_contains_ts_mocha"
+description = "scripts.test should use ts-mocha as configured"
+type = "contains"
+key_path = "scripts.test"
+expected = "ts-mocha"
+severity = "warning"
+
+# Optional: runner metadata
+[runner]
+# relative path to target Anchor.toml (runner should resolve relative to this file)
+target = "Anchor.toml"
+# exit_on_failure: if true, runner should exit non-zero when any error-severity test fails
+exit_on_failure = true

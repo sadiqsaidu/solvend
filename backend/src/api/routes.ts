@@ -2,7 +2,12 @@
 import express from 'express';
 import { validateOtpHandler, createPurchaseHandler } from './controllers/purchase.controller';
 import { getClaimProof } from './controllers/claims.controller';
-import { createReportPurchaseHandler } from './controllers/report.controller';
+// --- FIXED IMPORTS ---
+import {
+  createReportPurchaseHandler,
+  executeReportPurchaseHandler, // <-- ADDED
+} from './controllers/report.controller';
+// --- END FIX ---
 import { submitDistributionRootHandler, attachReportDataHandler } from './controllers/admin.controller';
 import { verifyAdminSignature } from './middleware/auth.middleware';
 
@@ -17,6 +22,7 @@ router.get('/claim-proof/:claimant', getClaimProof);
 
 // Report routes
 router.post('/report/create', createReportPurchaseHandler);
+router.post('/report/execute', executeReportPurchaseHandler);
 
 // Admin routes (with authentication)
 router.post('/admin/submit-distribution-root', verifyAdminSignature, submitDistributionRootHandler);

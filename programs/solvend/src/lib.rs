@@ -2,7 +2,8 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use solana_program::keccak;
 
-declare_id!("FGWgre3gcnWmAod7vDuL7ziMV28bgSrG7ng69g1kZfUW");
+// declare_id!("FGWgre3gcnWmAod7vDuL7ziMV28bgSrG7ng69g1kZfUW");
+declare_id!("Av3vUXdyGicXCkH5msoXLuPmgZA5UxZJpFgJsXVK3q99");
 
 #[program]
 pub mod solvend {
